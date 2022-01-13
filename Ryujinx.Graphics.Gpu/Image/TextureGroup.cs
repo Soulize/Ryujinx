@@ -1389,9 +1389,11 @@ namespace Ryujinx.Graphics.Gpu.Image
                 return;
             }
 
+            bool isGpuThread = _context.IsGpuThread();
+
             _context.Renderer.BackgroundContextAction(() =>
             {
-                handle.Sync(_context);
+                handle.Sync(_context, isGpuThread);
 
                 Storage.SignalModifiedDirty();
 

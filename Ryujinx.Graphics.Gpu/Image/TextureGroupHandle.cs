@@ -231,11 +231,12 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// removing the modified flag if it was reached, or leaving it set if it has not yet been created.
         /// </summary>
         /// <param name="context">The GPU context used to wait for sync</param>
-        public void Sync(GpuContext context)
+        /// <param name="isGpuThread">True if the caller is the GPU thread, false otherwise</param>
+        public void Sync(GpuContext context, bool isGpuThread)
         {
             _actionRegistered = false;
 
-            bool needsSync = !context.IsGpuThread();
+            bool needsSync = !isGpuThread;
 
             if (needsSync)
             {
@@ -254,7 +255,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                     Modified = false;
                 }
-                
+
                 // If the difference is <= 0, no data is not ready yet. Flush any data we can without waiting or removing modified flag.
             }
             else
