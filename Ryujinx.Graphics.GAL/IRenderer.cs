@@ -18,7 +18,11 @@ namespace Ryujinx.Graphics.GAL
 
         IShader CompileShader(ShaderStage stage, string code);
 
-        BufferHandle CreateBuffer(int size);
+        BufferHandle CreateBuffer(int size, BufferAccess access);
+        BufferHandle CreateBuffer(int size)
+        {
+            return CreateBuffer(size, BufferAccess.Default);
+        }
 
         IProgram CreateProgram(IShader[] shaders);
 

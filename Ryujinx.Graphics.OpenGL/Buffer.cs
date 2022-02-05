@@ -42,6 +42,20 @@ namespace Ryujinx.Graphics.OpenGL
             return Handle.FromInt32<BufferHandle>(handle);
         }
 
+        public static BufferHandle CreatePersistent(int size)
+        {
+            int handle = GL.GenBuffer();
+
+            GL.BindBuffer(BufferTarget.CopyWriteBuffer, handle);
+            GL.BufferStorage(BufferTarget.CopyWriteBuffer, size, IntPtr.Zero,
+                BufferStorageFlags.MapPersistentBit |
+                BufferStorageFlags.MapCoherentBit |
+                BufferStorageFlags.ClientStorageBit |
+                BufferStorageFlags.MapReadBit);
+
+            return Handle.FromInt32<BufferHandle>(handle);
+        }
+
         public static void Copy(BufferHandle source, BufferHandle destination, int srcOffset, int dstOffset, int size)
         {
             GL.BindBuffer(BufferTarget.CopyReadBuffer, source.ToInt32());
@@ -57,7 +71,11 @@ namespace Ryujinx.Graphics.OpenGL
 
         public static unsafe ReadOnlySpan<byte> GetData(Renderer renderer, BufferHandle buffer, int offset, int size)
         {
-            if (HwCapabilities.UsePersistentBufferForFlush)
+            if (renderer.PersistentBuffers.TryGetPersist(buffer, out IntPtr ptr))
+            {
+                return new ReadOnlySpan<byte>(IntPtr.Add(ptr, offset).ToPointer(), size);
+            }
+            else if (HwCapabilities.UsePersistentBufferForFlush)
             {
                 return renderer.PersistentBuffers.Default.GetBufferData(buffer, offset, size);
             }

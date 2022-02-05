@@ -259,10 +259,10 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             return shader;
         }
 
-        public BufferHandle CreateBuffer(int size)
+        public BufferHandle CreateBuffer(int size, BufferAccess access)
         {
             BufferHandle handle = Buffers.CreateBufferHandle();
-            New<CreateBufferCommand>().Set(handle, size);
+            New<CreateBufferCommand>().Set(handle, size, access);
             QueueCommand();
 
             return handle;

@@ -59,11 +59,22 @@ namespace Ryujinx.Graphics.OpenGL
             return new Shader(stage, code);
         }
 
-        public BufferHandle CreateBuffer(int size)
+        public BufferHandle CreateBuffer(int size, GAL.BufferAccess access)
         {
             BufferCount++;
 
-            return Buffer.Create(size);
+            if (access == GAL.BufferAccess.FlushPersistent)
+            {
+                BufferHandle handle = Buffer.CreatePersistent(size);
+
+                PersistentBuffers.Map(handle, size);
+
+                return handle;
+            }
+            else
+            {
+                return Buffer.Create(size);
+            }
         }
 
         public IProgram CreateProgram(IShader[] shaders)
@@ -90,6 +101,8 @@ namespace Ryujinx.Graphics.OpenGL
 
         public void DeleteBuffer(BufferHandle buffer)
         {
+            PersistentBuffers.Unmap(buffer);
+
             Buffer.Delete(buffer);
         }
 

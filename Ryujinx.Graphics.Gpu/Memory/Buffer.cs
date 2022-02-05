@@ -1,6 +1,7 @@
 using Ryujinx.Common.Logging;
 using Ryujinx.Cpu.Tracking;
 using Ryujinx.Graphics.GAL;
+using Ryujinx.Graphics.Gpu.Synchronization;
 using Ryujinx.Memory.Range;
 using Ryujinx.Memory.Tracking;
 using System;
@@ -12,7 +13,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
     /// <summary>
     /// Buffer, used to store vertex and index data, uniform and storage buffers, and others.
     /// </summary>
-    class Buffer : IRange, IDisposable
+    class Buffer : IRange, ISyncActionHandler, IDisposable
     {
         private const ulong GranularBufferThreshold = 4096;
 
@@ -247,7 +248,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
             if (!_syncActionRegistered)
             {
-                _context.RegisterSyncAction(SyncAction);
+                _context.RegisterSyncAction(this);
                 _syncActionRegistered = true;
             }
         }
@@ -266,7 +267,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// Action to be performed when a syncpoint is reached after modification.
         /// This will register read/write tracking to flush the buffer from GPU when its memory is used.
         /// </summary>
-        private void SyncAction()
+        /// <inheritdoc/>
+        public bool SyncAction(bool syncpoint)
         {
             _syncActionRegistered = false;
 
@@ -283,6 +285,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 _memoryTracking.RegisterAction(_externalFlushDelegate);
                 SynchronizeMemory(Address, Size);
             }
+
+            return true;
         }
 
         /// <summary>
@@ -295,7 +299,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
             {
                 if (from._syncActionRegistered && !_syncActionRegistered)
                 {
-                    _context.RegisterSyncAction(SyncAction);
+                    _context.RegisterSyncAction(this);
                     _syncActionRegistered = true;
                 }
 

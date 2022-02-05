@@ -60,14 +60,14 @@ namespace Ryujinx.Graphics.Gpu
         /// If there are more than 0 items when this happens, a host sync object will be generated for the given <see cref="SyncNumber"/>,
         /// and the SyncNumber will be incremented.
         /// </summary>
-        internal List<Action> SyncActions { get; }
+        internal List<ISyncActionHandler> SyncActions { get; }
 
         /// <summary>
         /// Actions to be performed when a CPU waiting syncpoint is triggered.
         /// If there are more than 0 items when this happens, a host sync object will be generated for the given <see cref="SyncNumber"/>,
         /// and the SyncNumber will be incremented.
         /// </summary>
-        internal List<Action> SyncpointActions { get; }
+        internal List<ISyncActionHandler> SyncpointActions { get; }
 
         /// <summary>
         /// Queue with deferred actions that must run on the render thread.
@@ -121,8 +121,8 @@ namespace Ryujinx.Graphics.Gpu
 
             HostInitalized = new ManualResetEvent(false);
 
-            SyncActions = new List<Action>();
-            SyncpointActions = new List<Action>();
+            SyncActions = new List<ISyncActionHandler>();
+            SyncpointActions = new List<ISyncActionHandler>();
 
             DeferredActions = new Queue<Action>();
 
@@ -289,9 +289,9 @@ namespace Ryujinx.Graphics.Gpu
         /// Registers an action to be performed the next time a syncpoint is incremented.
         /// This will also ensure a host sync object is created, and <see cref="SyncNumber"/> is incremented.
         /// </summary>
-        /// <param name="action">The action to be performed on sync object creation</param>
+        /// <param name="action">The resource with action to be performed on sync object creation</param>
         /// <param name="syncpointOnly">True if the sync action should only run when syncpoints are incremented</param>
-        public void RegisterSyncAction(Action action, bool syncpointOnly = false)
+        internal void RegisterSyncAction(ISyncActionHandler action, bool syncpointOnly = false)
         {
             if (syncpointOnly)
             {
@@ -308,26 +308,17 @@ namespace Ryujinx.Graphics.Gpu
         /// If no actions are present, a host sync object is not created.
         /// </summary>
         /// <param name="syncpoint">True if host sync is being created by a syncpoint</param>
-        public void CreateHostSyncIfNeeded(bool syncpoint)
+        /// <param name="force">True will force the sync to be created, even if no actions are eligible</param>
+        public void CreateHostSyncIfNeeded(bool syncpoint, bool force = false)
         {
-            if (SyncActions.Count > 0 || (syncpoint && SyncpointActions.Count > 0))
+            if (force || SyncActions.Count > 0 || (syncpoint && SyncpointActions.Count > 0))
             {
                 Renderer.CreateSync(SyncNumber);
 
                 SyncNumber++;
 
-                foreach (Action action in SyncActions)
-                {
-                    action();
-                }
-
-                foreach (Action action in SyncpointActions)
-                {
-                    action();
-                }
-
-                SyncActions.Clear();
-                SyncpointActions.Clear();
+                SyncActions.RemoveAll(action => action.SyncAction(syncpoint));
+                SyncpointActions.RemoveAll(action => action.SyncAction(syncpoint));
             }
         }
 

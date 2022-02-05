@@ -1379,11 +1379,8 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="bound">True if the texture has been bound, false if it has been unbound</param>
         public void SignalModifying(bool bound)
         {
-            if (_modifiedStale || Group.HasCopyDependencies)
-            {
-                _modifiedStale = false;
-                Group.SignalModifying(this, bound);
-            }
+            _modifiedStale = false;
+            Group.SignalModifying(this, bound);
 
             _physicalMemory.TextureCache.Lift(this);
 

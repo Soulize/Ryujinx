@@ -13,12 +13,38 @@ namespace Ryujinx.Graphics.OpenGL
         private PersistentBuffer _main = new PersistentBuffer();
         private PersistentBuffer _background = new PersistentBuffer();
 
+        private Dictionary<BufferHandle, IntPtr> _maps = new Dictionary<BufferHandle, IntPtr>();
+
         public PersistentBuffer Default => BackgroundContextWorker.InBackground ? _background : _main;
 
         public void Dispose()
         {
             _main?.Dispose();
             _background?.Dispose();
+        }
+
+        public void Map(BufferHandle handle, int size)
+        {
+            GL.BindBuffer(BufferTarget.CopyWriteBuffer, handle.ToInt32());
+            IntPtr ptr = GL.MapBufferRange(BufferTarget.CopyWriteBuffer, IntPtr.Zero, size, BufferAccessMask.MapReadBit | BufferAccessMask.MapPersistentBit);
+
+            _maps[handle] = ptr;
+        }
+
+        public void Unmap(BufferHandle handle)
+        {
+            if (_maps.ContainsKey(handle))
+            {
+                GL.BindBuffer(BufferTarget.CopyWriteBuffer, handle.ToInt32());
+                GL.UnmapBuffer(BufferTarget.CopyWriteBuffer);
+
+                _maps.Remove(handle);
+            }
+        }
+
+        public bool TryGetPersist(BufferHandle handle, out IntPtr ptr)
+        {
+            return _maps.TryGetValue(handle, out ptr);
         }
     }
 
