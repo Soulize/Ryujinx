@@ -45,6 +45,7 @@ namespace Ryujinx.Graphics.Vulkan
         internal object QueueLock { get; private set; }
 
         internal MemoryAllocator MemoryAllocator { get; private set; }
+        internal HostMemoryAllocator HostMemoryAllocator { get; private set; }
         internal CommandBufferPool CommandBufferPool { get; private set; }
         internal DescriptorSetManager DescriptorSetManager { get; private set; }
         internal PipelineLayoutCache PipelineLayoutCache { get; private set; }
@@ -281,6 +282,8 @@ namespace Ryujinx.Graphics.Vulkan
 
             MemoryAllocator = new MemoryAllocator(Api, _device, properties.Limits.MaxMemoryAllocationCount);
 
+            HostMemoryAllocator = new HostMemoryAllocator(Api, _device);
+
             CommandBufferPool = VulkanInitialization.CreateCommandBufferPool(Api, _device, Queue, QueueLock, queueFamilyIndex);
 
             DescriptorSetManager = new DescriptorSetManager(_device);
@@ -339,9 +342,14 @@ namespace Ryujinx.Graphics.Vulkan
             _initialized = true;
         }
 
-        public BufferHandle CreateBuffer(int size)
+        public BufferHandle CreateBuffer(int size, BufferAccess access)
         {
             return BufferManager.CreateWithHandle(this, size, false);
+        }
+
+        public BufferHandle CreateBuffer(nint pointer, int size)
+        {
+            return BufferManager.CreateHostImported(this, pointer, size);
         }
 
         public IProgram CreateProgram(ShaderSource[] sources, ShaderInfo info)
@@ -711,7 +719,13 @@ namespace Ryujinx.Graphics.Vulkan
 
         public void WaitSync(ulong id)
         {
+            long preTime = System.Diagnostics.Stopwatch.GetTimestamp();
+
             _syncManager.Wait(id);
+
+            long waitTime = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            //Common.Logging.Logger.Warning?.PrintMsg(Common.Logging.LogClass.Gpu, $" > Wait Time (id) {(waitTime - preTime) / (System.Diagnostics.Stopwatch.Frequency / 1000f)}ms");
         }
 
         public ulong GetCurrentSync()
@@ -779,6 +793,11 @@ namespace Ryujinx.Graphics.Vulkan
 
             // Last step destroy the instance
             Api.DestroyInstance(_instance, null);
+        }
+
+        public bool PrepareHostMapping(nint address, ulong size)
+        {
+            return HostMemoryAllocator.TryImport(_physicalDevice, BufferManager.GlobalRequirementsTest, BufferManager.DefaultBufferMemoryFlags, address, size);
         }
     }
 }

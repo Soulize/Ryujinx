@@ -55,11 +55,27 @@ namespace Ryujinx.Graphics.OpenGL
             ResourcePool = new ResourcePool();
         }
 
-        public BufferHandle CreateBuffer(int size)
+        public BufferHandle CreateBuffer(int size, GAL.BufferAccess access)
         {
             BufferCount++;
 
-            return Buffer.Create(size);
+            if (access == GAL.BufferAccess.FlushPersistent)
+            {
+                BufferHandle handle = Buffer.CreatePersistent(size);
+
+                PersistentBuffers.Map(handle, size);
+
+                return handle;
+            }
+            else
+            {
+                return Buffer.Create(size);
+            }
+        }
+
+        public BufferHandle CreateBuffer(nint pointer, int size)
+        {
+            throw new NotSupportedException();
         }
 
         public IProgram CreateProgram(ShaderSource[] shaders, ShaderInfo info)
@@ -86,6 +102,8 @@ namespace Ryujinx.Graphics.OpenGL
 
         public void DeleteBuffer(BufferHandle buffer)
         {
+            PersistentBuffers.Unmap(buffer);
+
             Buffer.Delete(buffer);
         }
 
@@ -262,6 +280,11 @@ namespace Ryujinx.Graphics.OpenGL
         public void OnScreenCaptured(ScreenCaptureImageInfo bitmap)
         {
             ScreenCaptured?.Invoke(this, bitmap);
+        }
+
+        public bool PrepareHostMapping(nint address, ulong size)
+        {
+            return false;
         }
     }
 }

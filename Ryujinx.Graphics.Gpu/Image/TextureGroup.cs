@@ -84,6 +84,9 @@ namespace Ryujinx.Graphics.Gpu.Image
         private bool _incompatibleOverlapsDirty = true;
         private bool _flushIncompatibleOverlaps;
 
+        private BufferHandle _flushBuffer;
+        private bool _flushBufferImported;
+
         /// <summary>
         /// Create a new texture group.
         /// </summary>
@@ -406,7 +409,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="tracked">True if writing the texture data is tracked, false otherwise</param>
         /// <param name="sliceIndex">The index of the slice to flush</param>
         /// <param name="texture">The specific host texture to flush. Defaults to the storage texture</param>
-        private void FlushTextureDataSliceToGuest(bool tracked, int sliceIndex, ITexture texture = null)
+        private void FlushTextureDataSliceToGuest(bool tracked, int sliceIndex, bool inBuffer, ITexture texture = null)
         {
             (int layer, int level) = GetLayerLevelForView(sliceIndex);
 
@@ -416,7 +419,16 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             using WritableRegion region = _physicalMemory.GetWritableRegion(Storage.Range.GetSlice((ulong)offset, (ulong)size), tracked);
 
-            Storage.GetTextureDataSliceFromGpu(region.Memory.Span, layer, level, tracked, texture);
+            if (inBuffer)
+            {
+                ReadOnlySpan<byte> data = _context.Renderer.GetBufferData(_flushBuffer, offset, size);
+
+                Storage.ConvertFromHostCompatibleFormat(region.Memory.Span, data, level, true);
+            }
+            else
+            {
+                Storage.GetTextureDataSliceFromGpu(region.Memory.Span, layer, level, tracked, texture);
+            }
         }
 
         /// <summary>
@@ -426,11 +438,11 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="sliceStart">The first slice to flush</param>
         /// <param name="sliceEnd">The slice to finish flushing on (exclusive)</param>
         /// <param name="texture">The specific host texture to flush. Defaults to the storage texture</param>
-        private void FlushSliceRange(bool tracked, int sliceStart, int sliceEnd, ITexture texture = null)
+        private void FlushSliceRange(bool tracked, int sliceStart, int sliceEnd, bool inBuffer, ITexture texture = null)
         {
             for (int i = sliceStart; i < sliceEnd; i++)
             {
-                FlushTextureDataSliceToGuest(tracked, i, texture);
+                FlushTextureDataSliceToGuest(tracked, i, inBuffer, texture);
             }
         }
 
@@ -487,7 +499,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                         {
                             if (endSlice > startSlice)
                             {
-                                FlushSliceRange(tracked, startSlice, endSlice);
+                                FlushSliceRange(tracked, startSlice, endSlice, false);
                                 flushed = true;
                             }
 
@@ -520,7 +532,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                     }
                     else
                     {
-                        FlushSliceRange(tracked, startSlice, endSlice);
+                        FlushSliceRange(tracked, startSlice, endSlice, false);
                     }
 
                     flushed = true;
@@ -530,6 +542,41 @@ namespace Ryujinx.Graphics.Gpu.Image
             Storage.SignalModifiedDirty();
 
             return flushed;
+        }
+
+        public void FlushIntoBuffer(TextureGroupHandle handle)
+        {
+            // Ensure that the buffer exists.
+
+            if (_flushBuffer == BufferHandle.Null)
+            {
+                bool canImport = Storage.Info.IsLinear;
+
+                var hostPointer = canImport ? _physicalMemory.GetHostPointer(Storage.Range) : 0;
+
+                if (hostPointer != 0 && _context.Renderer.PrepareHostMapping(hostPointer, Storage.Size))
+                {
+                    _flushBuffer = _context.Renderer.CreateBuffer(hostPointer, (int)Storage.Size);
+                    _flushBufferImported = true;
+                }
+                else
+                {
+                    _flushBuffer = _context.Renderer.CreateBuffer((int)Storage.Size, BufferAccess.FlushPersistent);
+                    _flushBufferImported = false;
+                }
+
+                Storage.BlacklistScale();
+            }
+
+            int sliceStart = handle.BaseSlice;
+            int sliceEnd = sliceStart + handle.SliceCount;
+
+            for (int i = sliceStart; i < sliceEnd; i++)
+            {
+                (int layer, int level) = GetLayerLevelForView(i);
+
+                Storage.GetFlushTexture().GetData(new BufferRange(_flushBuffer, _allOffsets[i], 1), layer, level, _flushBufferImported ? Storage.Info.Stride : 0);
+            }
         }
 
         /// <summary>
@@ -1449,10 +1496,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             _context.Renderer.BackgroundContextAction(() =>
             {
-                if (!isGpuThread)
-                {
-                    handle.Sync(_context);
-                }
+                bool inBuffer = !isGpuThread && handle.Sync(_context);
 
                 Storage.SignalModifiedDirty();
 
@@ -1464,9 +1508,9 @@ namespace Ryujinx.Graphics.Gpu.Image
                     }
                 }
 
-                if (TextureCompatibility.CanTextureFlush(Storage.Info, _context.Capabilities))
+                if (TextureCompatibility.CanTextureFlush(Storage.Info, _context.Capabilities) && !(inBuffer && _flushBufferImported))
                 {
-                    FlushSliceRange(false, handle.BaseSlice, handle.BaseSlice + handle.SliceCount, Storage.GetFlushTexture());
+                    FlushSliceRange(false, handle.BaseSlice, handle.BaseSlice + handle.SliceCount, inBuffer, Storage.GetFlushTexture());
                 }
             });
         }
@@ -1484,6 +1528,11 @@ namespace Ryujinx.Graphics.Gpu.Image
             foreach (TextureIncompatibleOverlap incompatible in _incompatibleOverlaps)
             {
                 incompatible.Group._incompatibleOverlaps.RemoveAll(overlap => overlap.Group == this);
+            }
+
+            if (_flushBuffer != BufferHandle.Null)
+            {
+                _context.Renderer.DeleteBuffer(_flushBuffer);
             }
         }
     }

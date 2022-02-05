@@ -4,6 +4,7 @@
     {
         Action,
         CreateBuffer,
+        CreateHostBuffer,
         CreateProgram,
         CreateSampler,
         CreateSync,
@@ -34,6 +35,7 @@
         TextureCreateView,
         TextureGetData,
         TextureGetDataSlice,
+        TextureGetDataToBuffer,
         TextureRelease,
         TextureSetData,
         TextureSetDataSlice,

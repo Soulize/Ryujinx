@@ -65,7 +65,7 @@ namespace Ryujinx.Graphics.Vulkan
             return newBl.Allocate(size, alignment, map);
         }
 
-        private static int FindSuitableMemoryTypeIndex(
+        internal static int FindSuitableMemoryTypeIndex(
             Vk api,
             PhysicalDevice physicalDevice,
             uint memoryTypeBits,

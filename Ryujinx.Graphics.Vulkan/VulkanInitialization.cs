@@ -24,6 +24,7 @@ namespace Ryujinx.Graphics.Vulkan
             ExtTransformFeedback.ExtensionName,
             KhrDrawIndirectCount.ExtensionName,
             KhrPushDescriptor.ExtensionName,
+            ExtExternalMemoryHost.ExtensionName,
             "VK_EXT_custom_border_color",
             "VK_EXT_descriptor_indexing", // Enabling this works around an issue with disposed buffer bindings on RADV.
             "VK_EXT_fragment_shader_interlock",
@@ -32,7 +33,7 @@ namespace Ryujinx.Graphics.Vulkan
             "VK_KHR_shader_float16_int8",
             "VK_EXT_shader_subgroup_ballot",
             "VK_EXT_subgroup_size_control",
-            "VK_NV_geometry_shader_passthrough"
+            "VK_NV_geometry_shader_passthrough",
         };
 
         public static string[] RequiredExtensions { get; } = new string[]

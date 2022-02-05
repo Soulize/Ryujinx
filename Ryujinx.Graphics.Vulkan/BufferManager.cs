@@ -9,7 +9,7 @@ namespace Ryujinx.Graphics.Vulkan
 {
     class BufferManager : IDisposable
     {
-        private const MemoryPropertyFlags DefaultBufferMemoryFlags =
+        public const MemoryPropertyFlags DefaultBufferMemoryFlags =
             MemoryPropertyFlags.HostVisibleBit |
             MemoryPropertyFlags.HostCoherentBit |
             MemoryPropertyFlags.HostCachedBit;
@@ -56,6 +56,38 @@ namespace Ryujinx.Graphics.Vulkan
             StagingBuffer = new StagingBuffer(gd, this);
         }
 
+        public unsafe BufferHandle CreateHostImported(VulkanRenderer gd, nint pointer, int size)
+        {
+            var usage = DefaultBufferUsageFlags;
+
+            if (gd.Capabilities.SupportsIndirectParameters)
+            {
+                usage |= BufferUsageFlags.IndirectBufferBit;
+            }
+
+            var bufferCreateInfo = new BufferCreateInfo()
+            {
+                SType = StructureType.BufferCreateInfo,
+                Size = (ulong)size,
+                Usage = usage,
+                SharingMode = SharingMode.Exclusive
+            };
+
+            gd.Api.CreateBuffer(_device, in bufferCreateInfo, null, out var buffer).ThrowOnError();
+
+            var allocation = gd.HostMemoryAllocator.GetExistingAllocation(pointer, (ulong)size);
+
+            gd.Api.BindBufferMemory(_device, buffer, allocation.Memory, allocation.Offset);
+
+            var holder = new BufferHolder(gd, _device, buffer, allocation, size);
+
+            BufferCount++;
+
+            ulong handle64 = (uint)_buffers.Add(holder);
+
+            return Unsafe.As<ulong, BufferHandle>(ref handle64);
+        }
+
         public BufferHandle CreateWithHandle(VulkanRenderer gd, int size, bool deviceLocal)
         {
             return CreateWithHandle(gd, size, deviceLocal, out _);
@@ -75,6 +107,8 @@ namespace Ryujinx.Graphics.Vulkan
 
             return Unsafe.As<ulong, BufferHandle>(ref handle64);
         }
+
+        public static MemoryRequirements GlobalRequirementsTest;
 
         public unsafe BufferHolder Create(VulkanRenderer gd, int size, bool forConditionalRendering = false, bool deviceLocal = false)
         {
@@ -102,6 +136,8 @@ namespace Ryujinx.Graphics.Vulkan
 
             MemoryPropertyFlags allocateFlags;
             MemoryPropertyFlags allocateFlagsAlt;
+
+            GlobalRequirementsTest = requirements;
 
             if (deviceLocal)
             {

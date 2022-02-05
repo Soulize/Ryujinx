@@ -7,6 +7,8 @@ using Ryujinx.Memory.Range;
 using Ryujinx.Memory.Tracking;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 
 namespace Ryujinx.Graphics.Gpu.Memory
@@ -79,6 +81,25 @@ namespace Ryujinx.Graphics.Gpu.Memory
             {
                 rc.DecrementReferenceCount();
             }
+        }
+
+        public nint GetHostPointer(MultiRange range)
+        {
+            if (range.Count == 1)
+            {
+                var singleRange = range.GetSubRange(0);
+                if (singleRange.Address != MemoryManager.PteUnmapped)
+                {
+                    var regions = _cpuMemory.GetHostRegions(singleRange.Address, singleRange.Size);
+
+                    if (regions != null && regions.Count() == 1)
+                    {
+                        return (nint)regions.First().Address;
+                    }
+                }
+            }
+
+            return 0;
         }
 
         /// <summary>

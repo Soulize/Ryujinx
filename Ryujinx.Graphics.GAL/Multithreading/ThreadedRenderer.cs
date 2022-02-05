@@ -265,10 +265,19 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             }
         }
 
-        public BufferHandle CreateBuffer(int size)
+        public BufferHandle CreateBuffer(nint pointer, int size)
         {
             BufferHandle handle = Buffers.CreateBufferHandle();
-            New<CreateBufferCommand>().Set(handle, size);
+            New<CreateHostBufferCommand>().Set(handle, pointer, size);
+            QueueCommand();
+
+            return handle;
+        }
+
+        public BufferHandle CreateBuffer(int size, BufferAccess access)
+        {
+            BufferHandle handle = Buffers.CreateBufferHandle();
+            New<CreateBufferCommand>().Set(handle, size, access);
             QueueCommand();
 
             return handle;
@@ -459,6 +468,11 @@ namespace Ryujinx.Graphics.GAL.Multithreading
         public void SetInterruptAction(Action<Action> interruptAction)
         {
             // Threaded renderer ignores given interrupt action, as it provides its own to the child renderer.
+        }
+
+        public bool PrepareHostMapping(nint address, ulong size)
+        {
+            return _baseRenderer.PrepareHostMapping(address, size);
         }
 
         public void Dispose()

@@ -1,5 +1,6 @@
 ﻿using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.GAL;
+using shaderc;
 using Silk.NET.Vulkan;
 using System;
 using System.Collections.Generic;
@@ -751,6 +752,19 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
+        public void GetData(BufferRange range, int layer, int level, int stride)
+        {
+            _gd.PipelineInternal.EndRenderPass();
+            var cbs = _gd.PipelineInternal.CurrentCommandBuffer;
+
+            int size = Info.GetMipSize(level);
+
+            var buffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, range.Handle, true).Get(cbs, range.Offset, size).Value;
+            var image = GetImage().Get(cbs).Value;
+
+            CopyFromOrToBuffer(cbs.CommandBuffer, buffer, image, size, true, layer, level, 1, 1, singleSlice: true, range.Offset, stride);
+        }
+
         private ReadOnlySpan<byte> GetData(CommandBufferPool cbp, PersistentFlushBuffer flushBuffer)
         {
             int size = 0;
@@ -896,7 +910,9 @@ namespace Ryujinx.Graphics.Vulkan
             int dstLevel,
             int dstLayers,
             int dstLevels,
-            bool singleSlice)
+            bool singleSlice,
+            int offset = 0,
+            int stride = 0)
         {
             bool is3D = Info.Target == Target.Texture3D;
             int width = Math.Max(1, Info.Width >> dstLevel);
@@ -905,8 +921,6 @@ namespace Ryujinx.Graphics.Vulkan
             int layer = is3D ? 0 : dstLayer;
             int layers = dstLayers;
             int levels = dstLevels;
-
-            int offset = 0;
 
             for (int level = 0; level < levels; level++)
             {
@@ -919,7 +933,7 @@ namespace Ryujinx.Graphics.Vulkan
                     break;
                 }
 
-                int rowLength = (Info.GetMipStride(dstLevel + level) / Info.BytesPerPixel) * Info.BlockWidth;
+                int rowLength = ((stride == 0 ? Info.GetMipStride(dstLevel + level) : stride) / Info.BytesPerPixel) * Info.BlockWidth;
 
                 var aspectFlags = Info.Format.ConvertAspectFlags();
 
