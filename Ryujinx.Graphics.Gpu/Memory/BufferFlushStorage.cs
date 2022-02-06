@@ -109,7 +109,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
             {
                 foreach (var region in result)
                 {
-                    if ((long)(syncNumber - region.SyncNumber) < 0 || region.SyncNumber == 0)
+                    if (region.SyncNumber == 0)
                     {
                         canFlush = false;
                         break;
@@ -119,12 +119,10 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
             if (canFlush)
             {
-                Common.Logging.Logger.Warning?.Print(Common.Logging.LogClass.Gpu, $"Speedy flush {offset:x8} {size:x8}");
                 data = _context.Renderer.GetBufferData(_flushBuffer, (int)offset, (int)size);
             }
             else
             {
-                Common.Logging.Logger.Error?.Print(Common.Logging.LogClass.Gpu, $"Slow flush {offset:x8} {size:x8}");
                 data = ReadOnlySpan<byte>.Empty;
             }
 
