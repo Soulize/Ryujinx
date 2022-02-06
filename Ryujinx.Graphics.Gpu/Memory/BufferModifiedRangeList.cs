@@ -18,7 +18,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <summary>
         /// Size of the range in bytes.
         /// </summary>
-        public ulong Size { get; }
+        public ulong Size { get; protected set; }
 
         /// <summary>
         /// End address of the range in guest memory.
@@ -219,7 +219,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="address">Start address to query</param>
         /// <param name="size">Size to query</param>
         /// <param name="rangeAction">The action to call for each modified range</param>
-        public void WaitForAndGetRanges(ulong address, ulong size, Action<ulong, ulong> rangeAction)
+        public void WaitForAndGetRanges(ulong address, ulong size, Action<ulong, ulong, ulong> rangeAction)
         {
             ulong endAddress = address + size;
             ulong currentSync = _context.SyncNumber;
@@ -261,8 +261,9 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 return;
             }
 
+            ulong waitSync = currentSync + (ulong)highestDiff;
             // Wait for the syncpoint.
-            _context.Renderer.WaitSync(currentSync + (ulong)highestDiff);
+            _context.Renderer.WaitSync(waitSync);
 
             // Flush and remove all regions with the older syncpoint.
             lock (_lock)
@@ -280,7 +281,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
                         ClearPart(overlap, clampAddress, clampEnd);
 
-                        rangeAction(clampAddress, clampEnd - clampAddress);
+                        rangeAction(clampAddress, clampEnd - clampAddress, waitSync);
                     }
                 }
             }

@@ -1,4 +1,4 @@
-´╗┐namespace Ryujinx.Graphics.Gpu.Synchronization
+namespace Ryujinx.Graphics.Gpu.Synchronization
 {
     /// <summary>
     /// This interface indicates that a class can be registered for a sync action.

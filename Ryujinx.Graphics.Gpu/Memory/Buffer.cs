@@ -7,6 +7,7 @@ using Ryujinx.Memory.Tracking;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace Ryujinx.Graphics.Gpu.Memory
 {
@@ -54,6 +55,13 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// This is null until at least one modification occurs.
         /// </remarks>
         private BufferModifiedRangeList _modifiedRanges = null;
+
+        /// <summary>
+        /// Flush storage for this buffer.
+        /// This is essentially a second buffer that is persistently mapped and accessible without waiting on GPU.
+        /// Buffer ranges that are flushed often are copied into this storage before sync is created for quick access.
+        /// </summary>
+        private BufferFlushStorage _flushStorage = null;
 
         private readonly CpuMultiRegionHandle _memoryTrackingGranular;
         private readonly CpuRegionHandle _memoryTracking;
@@ -236,6 +244,17 @@ namespace Ryujinx.Graphics.Gpu.Memory
         }
 
         /// <summary>
+        /// Ensure that flush storage exists.
+        /// </summary>
+        private void EnsureFlushStorage()
+        {
+            if (_flushStorage == null)
+            {
+                Interlocked.CompareExchange(ref _flushStorage, new BufferFlushStorage(_context, this), null);
+            }
+        }
+
+        /// <summary>
         /// Signal that the given region of the buffer has been modified.
         /// </summary>
         /// <param name="address">The start address of the modified region</param>
@@ -272,18 +291,36 @@ namespace Ryujinx.Graphics.Gpu.Memory
         {
             _syncActionRegistered = false;
 
+            BufferFlushStorage flushStorage = _flushStorage;
+
             if (_useGranular)
             {
                 _modifiedRanges?.GetRanges(Address, Size, (address, size) =>
                 {
                     _memoryTrackingGranular.RegisterAction(address, size, _externalFlushDelegate);
                     SynchronizeMemory(address, size);
+
+                    if (flushStorage != null)
+                    {
+                        lock (flushStorage)
+                        {
+                            flushStorage.TryCopy(address - Address, size, _context.SyncNumber - 1);
+                        }
+                    }
                 });
             }
             else
             {
                 _memoryTracking.RegisterAction(_externalFlushDelegate);
                 SynchronizeMemory(Address, Size);
+
+                if (flushStorage != null)
+                {
+                    lock (flushStorage)
+                    {
+                        flushStorage.TryCopy(0, Size, _context.SyncNumber - 1);
+                    }
+                }
             }
 
             return true;
@@ -422,11 +459,27 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// </summary>
         /// <param name="address">Start address of the range</param>
         /// <param name="size">Size in bytes of the range</param>
-        public void Flush(ulong address, ulong size)
+        public void Flush(ulong address, ulong size, ulong syncNumber)
         {
             int offset = (int)(address - Address);
 
-            ReadOnlySpan<byte> data = _context.Renderer.GetBufferData(Handle, offset, (int)size);
+            EnsureFlushStorage();
+            BufferFlushStorage flushStorage = _flushStorage;
+
+            ReadOnlySpan<byte> data = ReadOnlySpan<byte>.Empty;
+
+            if (flushStorage != null)
+            {
+                lock (flushStorage)
+                {
+                    flushStorage.TryFlush((ulong)offset, size, syncNumber, out data);
+                }
+            }
+
+            if (data.IsEmpty)
+            {
+                data = _context.Renderer.GetBufferData(Handle, offset, (int)size);
+            }
 
             // TODO: When write tracking shaders, they will need to be aware of changes in overlapping buffers.
             _physicalMemory.WriteUntracked(address, data);
@@ -521,6 +574,16 @@ namespace Ryujinx.Graphics.Gpu.Memory
             _modifiedRanges?.Clear();
 
             _context.Renderer.DeleteBuffer(Handle);
+
+            BufferFlushStorage flushStorage = _flushStorage;
+            _flushStorage = null;
+            if (flushStorage != null)
+            {
+                lock (flushStorage)
+                {
+                    flushStorage.Dispose();
+                }
+            }
 
             UnmappedSequence++;
         }
