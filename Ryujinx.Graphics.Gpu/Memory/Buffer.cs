@@ -300,13 +300,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
                     _memoryTrackingGranular.RegisterAction(address, size, _externalFlushDelegate);
                     SynchronizeMemory(address, size);
 
-                    if (flushStorage != null)
-                    {
-                        lock (flushStorage)
-                        {
-                            flushStorage.TryCopy(address - Address, size, _context.SyncNumber - 1);
-                        }
-                    }
+                    flushStorage?.TryCopy(address - Address, size, _context.SyncNumber - 1);
                 });
             }
             else
@@ -314,13 +308,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 _memoryTracking.RegisterAction(_externalFlushDelegate);
                 SynchronizeMemory(Address, Size);
 
-                if (flushStorage != null)
-                {
-                    lock (flushStorage)
-                    {
-                        flushStorage.TryCopy(0, Size, _context.SyncNumber - 1);
-                    }
-                }
+                flushStorage?.TryCopy(0, Size, _context.SyncNumber - 1);
             }
 
             return true;
@@ -468,13 +456,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
             ReadOnlySpan<byte> data = ReadOnlySpan<byte>.Empty;
 
-            if (flushStorage != null)
-            {
-                lock (flushStorage)
-                {
-                    flushStorage.TryFlush((ulong)offset, size, syncNumber, out data);
-                }
-            }
+            flushStorage?.TryFlush((ulong)offset, size, syncNumber, out data);
 
             if (data.IsEmpty)
             {
@@ -577,13 +559,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
             BufferFlushStorage flushStorage = _flushStorage;
             _flushStorage = null;
-            if (flushStorage != null)
-            {
-                lock (flushStorage)
-                {
-                    flushStorage.Dispose();
-                }
-            }
+            flushStorage?.Dispose();
 
             UnmappedSequence++;
         }

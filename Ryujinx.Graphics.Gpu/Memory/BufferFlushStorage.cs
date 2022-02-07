@@ -35,6 +35,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         private bool _disposed;
 
         private NonOverlappingRangeList<BufferFlushableRange> _flushable;
+        private object _lock = new object();
 
         public BufferFlushStorage(GpuContext context, Buffer parent)
         {
@@ -46,95 +47,104 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
         public void TryCopy(ulong offset, ulong size, ulong syncNumber)
         {
-            // If the given range is represented on the flushable list, copy the data and update the sync number.
-            // It's possible it only partially exists - in that case, copy the flushable subregions only.
-
-            if (_flushBuffer == BufferHandle.Null)
+            lock (_lock)
             {
-                _flushBuffer = _context.Renderer.CreateBuffer((int)_parent.Size, BufferAccess.FlushPersistent);
-            }
+                // If the given range is represented on the flushable list, copy the data and update the sync number.
+                // It's possible it only partially exists - in that case, copy the flushable subregions only.
 
-            ref var overlaps = ref ThreadStaticArray<BufferFlushableRange>.Get();
-
-            int overlapCount = _flushable.FindOverlapsNonOverlapping(offset, size, ref overlaps);
-
-            ulong start = 0;
-            ulong end = 0;
-            for (int i = 0; i < overlapCount; i++)
-            {
-                var overlap = overlaps[i];
-
-                if (overlap.SyncNumber != syncNumber)
+                if (_flushBuffer == BufferHandle.Null)
                 {
-                    if (end == overlap.Address)
-                    {
-                        end += overlap.Size;
-                    }
-                    else
-                    {
-                        // If there's a range, copy it.
+                    _flushBuffer = _context.Renderer.CreateBuffer((int)_parent.Size, BufferAccess.FlushPersistent);
+                }
 
-                        if (start != end)
+                ref var overlaps = ref ThreadStaticArray<BufferFlushableRange>.Get();
+
+                int overlapCount = _flushable.FindOverlapsNonOverlapping(offset, size, ref overlaps);
+
+                ulong start = 0;
+                ulong end = 0;
+                for (int i = 0; i < overlapCount; i++)
+                {
+                    var overlap = overlaps[i];
+
+                    if (overlap.SyncNumber != syncNumber)
+                    {
+                        if (end == overlap.Address)
                         {
-                            _context.Renderer.Pipeline.CopyBuffer(_parent.Handle, _flushBuffer, (int)start, (int)start, (int)(end - start));
+                            end += overlap.Size;
+                        }
+                        else
+                        {
+                            // If there's a range, copy it.
+
+                            if (start != end)
+                            {
+                                _context.Renderer.Pipeline.CopyBuffer(_parent.Handle, _flushBuffer, (int)start, (int)start, (int)(end - start));
+                            }
+
+                            start = overlap.Address;
+                            end = start + overlap.Size;
                         }
 
-                        start = overlap.Address;
-                        end = start + overlap.Size;
+                        overlap.SyncNumber = syncNumber;
                     }
-
-                    overlap.SyncNumber = syncNumber;
                 }
-            }
 
-            if (start != end)
-            {
-                _context.Renderer.Pipeline.CopyBuffer(_parent.Handle, _flushBuffer, (int)start, (int)start, (int)(end - start));
+                if (start != end)
+                {
+                    _context.Renderer.Pipeline.CopyBuffer(_parent.Handle, _flushBuffer, (int)start, (int)start, (int)(end - start));
+                }
             }
         }
 
         public bool TryFlush(ulong offset, ulong size, ulong syncNumber, out ReadOnlySpan<byte> data)
         {
-            // To copy from the flush buffer:
-            // - The range must be fully represented on the flushable range list, and copied to at least the requested sync number.
-
-            List<BufferFlushableRange> result = new List<BufferFlushableRange>();
-            _flushable.GetOrAddRegions(result, offset, size, (address, size) =>
+            lock (_lock)
             {
-                return new BufferFlushableRange(address, size, 0);
-            });
+                // To copy from the flush buffer:
+                // - The range must be fully represented on the flushable range list, and copied to at least the requested sync number.
 
-            bool canFlush = !_disposed;
-            if (canFlush)
-            {
-                foreach (var region in result)
+                List<BufferFlushableRange> result = new List<BufferFlushableRange>();
+                _flushable.GetOrAddRegions(result, offset, size, (address, size) =>
                 {
-                    if (region.SyncNumber == 0)
+                    return new BufferFlushableRange(address, size, 0);
+                });
+
+                bool canFlush = !_disposed;
+                if (canFlush)
+                {
+                    foreach (var region in result)
                     {
-                        canFlush = false;
-                        break;
+                        if (region.SyncNumber == 0)
+                        {
+                            canFlush = false;
+                            break;
+                        }
                     }
                 }
-            }
 
-            if (canFlush)
-            {
-                data = _context.Renderer.GetBufferData(_flushBuffer, (int)offset, (int)size);
-            }
-            else
-            {
-                data = ReadOnlySpan<byte>.Empty;
-            }
+                if (canFlush)
+                {
+                    data = _context.Renderer.GetBufferData(_flushBuffer, (int)offset, (int)size);
+                }
+                else
+                {
+                    data = ReadOnlySpan<byte>.Empty;
+                }
 
-            return canFlush;
+                return canFlush;
+            }
         }
 
         public void Dispose()
         {
-            _disposed = true;
-            if (_flushBuffer != BufferHandle.Null)
+            lock (_lock)
             {
-                _context.Renderer.DeleteBuffer(_flushBuffer);
+                _disposed = true;
+                if (_flushBuffer != BufferHandle.Null)
+                {
+                    _context.Renderer.DeleteBuffer(_flushBuffer);
+                }
             }
         }
     }
