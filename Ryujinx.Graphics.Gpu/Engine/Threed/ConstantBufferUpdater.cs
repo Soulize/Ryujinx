@@ -16,6 +16,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         private ulong _ubBeginCpuAddress = 0;
         private ulong _ubFollowUpAddress = 0;
         private ulong _ubByteCount = 0;
+        private bool _ubDirty = false;
 
         /// <summary>
         /// Creates a new instance of the constant buffer updater.
@@ -105,12 +106,13 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         /// </summary>
         public void FlushUboDirty()
         {
-            if (_ubFollowUpAddress != 0)
+            if (_ubFollowUpAddress != 0 && _ubDirty)
             {
                 var memoryManager = _channel.MemoryManager;
                 memoryManager.Physical.BufferCache.ForceDirty(memoryManager, _ubFollowUpAddress - _ubByteCount, _ubByteCount);
 
                 _ubFollowUpAddress = 0;
+                _ubDirty = false;
             }
         }
 
@@ -131,6 +133,9 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
                 _ubByteCount = 0;
                 _ubBeginCpuAddress = _channel.MemoryManager.Translate(address);
             }
+
+            int oldData = _channel.MemoryManager.Physical.Read<int>(_ubBeginCpuAddress + _ubByteCount);
+            _ubDirty |= oldData != argument;
 
             var byteData = MemoryMarshal.Cast<int, byte>(MemoryMarshal.CreateSpan(ref argument, 1));
             _channel.MemoryManager.Physical.WriteUntracked(_ubBeginCpuAddress + _ubByteCount, byteData);
@@ -162,6 +167,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
             }
 
             var byteData = MemoryMarshal.Cast<int, byte>(data);
+            var oldData = _channel.MemoryManager.Physical.GetSpan(_ubBeginCpuAddress + _ubByteCount, byteData.Length);
+            _ubDirty |= !byteData.SequenceEqual(oldData);
             _channel.MemoryManager.Physical.WriteUntracked(_ubBeginCpuAddress + _ubByteCount, byteData);
 
             _ubFollowUpAddress = address + size;
