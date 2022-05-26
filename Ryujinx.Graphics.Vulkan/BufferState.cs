@@ -37,7 +37,10 @@ namespace Ryujinx.Graphics.Vulkan
         {
             if (_buffer != null)
             {
-                api.CmdBindIndexBuffer(cbs.CommandBuffer, _buffer.Get(cbs, _offset, _size).Value, (ulong)_offset, _type);
+                int offset = _offset;
+                DisposableBuffer buffer = _buffer.GetMirrorable(cbs, ref offset, _size);
+
+                api.CmdBindIndexBuffer(cbs.CommandBuffer, buffer.Value, (ulong)offset, _type);
             }
         }
 
@@ -45,7 +48,7 @@ namespace Ryujinx.Graphics.Vulkan
         {
             if (_buffer != null)
             {
-                var buffer = _buffer.Get(cbs, _offset, _size).Value;
+                var buffer = _buffer.Get(cbs, _offset, _size, true).Value;
 
                 gd.TransformFeedbackApi.CmdBindTransformFeedbackBuffers(cbs.CommandBuffer, binding, 1, buffer, (ulong)_offset, (ulong)_size);
             }
@@ -55,7 +58,8 @@ namespace Ryujinx.Graphics.Vulkan
         {
             if (_buffer != null)
             {
-                var buffer = _buffer.Get(cbs, _offset, _size).Value;
+                int offset = _offset;
+                var buffer = _buffer.GetMirrorable(cbs, ref offset, _size).Value;
 
                 if (gd.Capabilities.SupportsExtendedDynamicState)
                 {
@@ -64,15 +68,20 @@ namespace Ryujinx.Graphics.Vulkan
                         binding,
                         1,
                         buffer,
-                        (ulong)_offset,
+                        (ulong)offset,
                         (ulong)_size,
                         _stride);
                 }
                 else
                 {
-                    gd.Api.CmdBindVertexBuffers(cbs.CommandBuffer, binding, 1, buffer, (ulong)_offset);
+                    gd.Api.CmdBindVertexBuffers(cbs.CommandBuffer, binding, 1, buffer, (ulong)offset);
                 }
             }
+        }
+
+        public bool Overlaps(Auto<DisposableBuffer> buffer, int offset, int size)
+        {
+            return buffer == _buffer && offset < _offset + _size && offset + size > _offset;
         }
 
         public void Dispose()

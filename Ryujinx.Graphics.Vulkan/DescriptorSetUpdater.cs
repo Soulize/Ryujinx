@@ -11,7 +11,6 @@ namespace Ryujinx.Graphics.Vulkan
     {
         private readonly VulkanRenderer _gd;
         private readonly PipelineBase _pipeline;
-
         private ShaderCollection _program;
 
         private Auto<DisposableBuffer>[] _uniformBufferRefs;
@@ -33,6 +32,9 @@ namespace Ryujinx.Graphics.Vulkan
         private bool[] _uniformSet;
         private bool[] _storageSet;
         private Silk.NET.Vulkan.Buffer _cachedSupportBuffer;
+
+        private int[] _uniformBufferOffsets;
+        private int[] _storageBufferOffsets;
 
         [Flags]
         private enum DirtyFlags
@@ -97,6 +99,9 @@ namespace Ryujinx.Graphics.Vulkan
                 _dummyBuffer = gd.BufferManager.Create(gd, 0x10000, forConditionalRendering: false, deviceLocal: true);
             }
 
+            _uniformBufferOffsets = new int[Constants.MaxStorageBufferBindings];
+            _storageBufferOffsets = new int[Constants.MaxStorageBufferBindings];
+
             _dummyTexture = gd.CreateTextureView(new GAL.TextureCreateInfo(
                 1,
                 1,
@@ -130,6 +135,59 @@ namespace Ryujinx.Graphics.Vulkan
                 1f));
         }
 
+        private bool BindingOverlaps(ref DescriptorBufferInfo info, int bindingOffset, int offset, int size)
+        {
+            return offset < bindingOffset + (int)info.Range && (offset + size) > bindingOffset;
+        }
+
+        internal void Rebind(Auto<DisposableBuffer> buffer, int offset, int size)
+        {
+            if (_program == null)
+            {
+                return;
+            }
+
+            // Explicitly check the support buffer.
+
+            if (_uniformBufferRefs[0] == buffer)
+            {
+                ref DescriptorBufferInfo info = ref _uniformBuffers[0];
+                int bindingOffset = _uniformBufferOffsets[0];
+
+                if (BindingOverlaps(ref info, bindingOffset, offset, size))
+                {
+                    _uniformSet[0] = false;
+                    SignalDirty(DirtyFlags.Uniform);
+                }
+            }
+
+            // Check stage bindings
+
+            int uniformStagesCount = _program.Bindings[PipelineBase.UniformSetIndex].Length;
+
+            for (int i = 0; i < uniformStagesCount; i++)
+            {
+                int[] stageBindings = _program.Bindings[PipelineBase.UniformSetIndex][i];
+
+                for (int j = 0; j < stageBindings.Length; j++)
+                {
+                    int binding = stageBindings[j];
+
+                    if (binding < _uniformBufferRefs.Length && _uniformBufferRefs[binding] == buffer)
+                    {
+                        ref DescriptorBufferInfo info = ref _uniformBuffers[binding];
+                        int bindingOffset = _uniformBufferOffsets[binding];
+
+                        if (BindingOverlaps(ref info, bindingOffset, offset, size))
+                        {
+                            _uniformSet[binding] = false;
+                            SignalDirty(DirtyFlags.Uniform);
+                        }
+                    }
+                }
+            }
+        }
+
         public void SetProgram(ShaderCollection program)
         {
             _program = program;
@@ -160,8 +218,8 @@ namespace Ryujinx.Graphics.Vulkan
         {
             for (int i = 0; i < buffers.Length; i++)
             {
-                var buffer = buffers[i];
                 int index = first + i;
+                var buffer = buffers[i];
 
                 Auto<DisposableBuffer> vkBuffer = _gd.BufferManager.GetBuffer(commandBuffer, buffer.Handle, false);
                 ref Auto<DisposableBuffer> currentVkBuffer = ref _storageBufferRefs[index];
@@ -171,6 +229,7 @@ namespace Ryujinx.Graphics.Vulkan
                     Offset = (ulong)buffer.Offset,
                     Range = (ulong)buffer.Size
                 };
+
                 ref DescriptorBufferInfo currentInfo = ref _storageBuffers[index];
 
                 if (vkBuffer != currentVkBuffer || currentInfo.Offset != info.Offset || currentInfo.Range != info.Range)
@@ -179,6 +238,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                     currentInfo = info;
                     currentVkBuffer = vkBuffer;
+                    _storageBufferOffsets[index] = buffer.Offset;
                 }
             }
 
@@ -213,8 +273,8 @@ namespace Ryujinx.Graphics.Vulkan
         {
             for (int i = 0; i < buffers.Length; i++)
             {
-                var buffer = buffers[i];
                 int index = first + i;
+                var buffer = buffers[i];
 
                 Auto<DisposableBuffer> vkBuffer = _gd.BufferManager.GetBuffer(commandBuffer, buffer.Handle, false);
                 ref Auto<DisposableBuffer> currentVkBuffer = ref _uniformBufferRefs[index];
@@ -224,6 +284,7 @@ namespace Ryujinx.Graphics.Vulkan
                     Offset = (ulong)buffer.Offset,
                     Range = (ulong)buffer.Size
                 };
+
                 ref DescriptorBufferInfo currentInfo = ref _uniformBuffers[index];
 
                 if (vkBuffer != currentVkBuffer || currentInfo.Offset != info.Offset || currentInfo.Range != info.Range)
@@ -232,6 +293,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                     currentInfo = info;
                     currentVkBuffer = vkBuffer;
+                    _uniformBufferOffsets[index] = buffer.Offset;
                 }
             }
 
@@ -283,11 +345,22 @@ namespace Ryujinx.Graphics.Vulkan
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void UpdateBuffer(
             CommandBufferScoped cbs,
+            int offset,
             ref DescriptorBufferInfo info,
             Auto<DisposableBuffer> buffer,
-            Auto<DisposableBuffer> dummyBuffer)
+            Auto<DisposableBuffer> dummyBuffer,
+            bool mirrorable)
         {
-            info.Buffer = buffer?.Get(cbs, (int)info.Offset, (int)info.Range).Value ?? default;
+            if (mirrorable)
+            {
+                info.Buffer = buffer?.GetMirrorable(cbs, ref offset, (int)info.Range).Value ?? default;
+            }
+            else
+            {
+                info.Buffer = buffer?.Get(cbs, offset, (int)info.Range).Value ?? default;
+            }
+
+            info.Offset = (ulong)offset;
 
             // The spec requires that buffers with null handle have offset as 0 and range as VK_WHOLE_SIZE.
             if (info.Buffer.Handle == 0)
@@ -323,15 +396,17 @@ namespace Ryujinx.Graphics.Vulkan
                 {
                     Span<DescriptorBufferInfo> uniformBuffer = stackalloc DescriptorBufferInfo[1];
 
+                    int supportBufferOffset = 0;
+
                     if (!_uniformSet[0])
                     {
-                        _cachedSupportBuffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, _pipeline.SupportBufferUpdater.Handle, false).Get(cbs, 0, SupportBuffer.RequiredSize).Value;
+                        _cachedSupportBuffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, _pipeline.SupportBufferUpdater.Handle, false).Get(cbs, supportBufferOffset, SupportBuffer.RequiredSize).Value;
                         _uniformSet[0] = true;
                     }
 
                     uniformBuffer[0] = new DescriptorBufferInfo()
                     {
-                        Offset = 0,
+                        Offset = (ulong)supportBufferOffset,
                         Range = (ulong)SupportBuffer.RequiredSize,
                         Buffer = _cachedSupportBuffer
                     };
@@ -364,7 +439,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                             if (!_uniformSet[index])
                             {
-                                UpdateBuffer(cbs, ref _uniformBuffers[index], _uniformBufferRefs[index], dummyBuffer);
+                                UpdateBuffer(cbs, _uniformBufferOffsets[index], ref _uniformBuffers[index], _uniformBufferRefs[index], dummyBuffer, true);
 
                                 _uniformSet[index] = true;
                             }
@@ -381,7 +456,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                             if (!_storageSet[index])
                             {
-                                UpdateBuffer(cbs, ref _storageBuffers[index], _storageBufferRefs[index], dummyBuffer);
+                                UpdateBuffer(cbs, _storageBufferOffsets[index], ref _storageBuffers[index], _storageBufferRefs[index], dummyBuffer, false);
 
                                 _storageSet[index] = true;
                             }
@@ -534,7 +609,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                         if (!_uniformSet[index])
                         {
-                            UpdateBuffer(cbs, ref _uniformBuffers[index], _uniformBufferRefs[index], dummyBuffer);
+                            UpdateBuffer(cbs, _uniformBufferOffsets[index], ref _uniformBuffers[index], _uniformBufferRefs[index], dummyBuffer, true);
                             _uniformSet[index] = true;
                             doUpdate = true;
                         }

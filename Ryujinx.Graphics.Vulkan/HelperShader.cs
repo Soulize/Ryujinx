@@ -293,7 +293,7 @@ namespace Ryujinx.Graphics.Vulkan
         {
             // TODO: Do this with a compute shader?
             var srcBuffer = src.GetBuffer().Get(cbs, srcOffset, size).Value;
-            var dstBuffer = dst.GetBuffer().Get(cbs, 0, size * 2).Value;
+            var dstBuffer = dst.GetBuffer().Get(cbs, 0, size * 2, true).Value;
 
             gd.Api.CmdFillBuffer(cbs.CommandBuffer, dstBuffer, 0, Vk.WholeSize, 0);
 

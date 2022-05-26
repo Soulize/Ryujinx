@@ -17,6 +17,7 @@ namespace Ryujinx.Graphics.Vulkan
 
         private readonly List<BufferedQuery> _pendingQueryCopies;
         private readonly List<BufferedQuery> _pendingQueryResets;
+        private readonly List<BufferHolder> _activeBufferMirrors;
 
         private ulong _byteWeight;
 
@@ -25,6 +26,7 @@ namespace Ryujinx.Graphics.Vulkan
             _activeQueries = new List<QueryPool>();
             _pendingQueryCopies = new();
             _pendingQueryResets = new List<BufferedQuery>();
+            _activeBufferMirrors = new List<BufferHolder>();
 
             CommandBuffer = (Cbs = gd.CommandBufferPool.Rent()).CommandBuffer;
         }
@@ -220,6 +222,13 @@ namespace Ryujinx.Graphics.Vulkan
 
             // Restore per-command buffer state.
 
+            foreach (BufferHolder buffer in _activeBufferMirrors)
+            {
+                buffer.ClearMirrors();
+            }
+
+            _activeBufferMirrors.Clear();
+
             if (Pipeline != null)
             {
                 Gd.Api.CmdBindPipeline(CommandBuffer, Pbp, Pipeline.Get(Cbs).Value);
@@ -232,6 +241,11 @@ namespace Ryujinx.Graphics.Vulkan
             }
 
             SignalCommandBufferChange();
+        }
+
+        public void RegisterActiveMirror(BufferHolder buffer)
+        {
+            _activeBufferMirrors.Add(buffer);
         }
 
         public void BeginQuery(BufferedQuery query, QueryPool pool, bool needsReset)
