@@ -1,9 +1,24 @@
+using Ryujinx.Common;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace Ryujinx.Graphics.Vulkan
 {
+    struct StagingBufferReserved
+    {
+        public readonly BufferHolder Buffer;
+        public readonly int Offset;
+        public readonly int Size;
+
+        public StagingBufferReserved(BufferHolder buffer, int offset, int size)
+        {
+            Buffer = buffer;
+            Offset = offset;
+            Size = size;
+        }
+    }
+
     class StagingBuffer : IDisposable
     {
         private const int BufferSize = 16 * 1024 * 1024;
@@ -130,11 +145,82 @@ namespace Ryujinx.Graphics.Vulkan
                 }
             }
 
-            endRenderPass();
+            endRenderPass?.Invoke();
 
             PushDataImpl(cbs, dst, dstOffset, data);
 
             return true;
+        }
+
+        private StagingBufferReserved ReserveDataImpl(CommandBufferScoped cbs, ReadOnlySpan<byte> data, int alignment)
+        {
+            // Assumes the caller has already determined that there is enough space.
+            int offset = BitUtils.AlignUp(_freeOffset, alignment);
+            int padding = offset - _freeOffset;
+
+            int capacity = Math.Min(_freeSize, BufferSize - offset);
+            int reservedLength = data.Length + padding;
+            if (capacity < data.Length)
+            {
+                offset = 0; // Place at start.
+                reservedLength += capacity;
+            }
+
+            _buffer.SetDataUnchecked(offset, data);
+
+            _freeOffset = (_freeOffset + reservedLength) & (BufferSize - 1);
+            _freeSize -= reservedLength;
+            Debug.Assert(_freeSize >= 0);
+
+            _pendingCopies.Enqueue(new PendingCopy(cbs.GetFence(), reservedLength));
+
+            return new StagingBufferReserved(_buffer, offset, data.Length);
+        }
+
+        private int GetContiguousFreeSize(int alignment)
+        {
+            int alignedFreeOffset = BitUtils.AlignUp(_freeOffset, alignment);
+            int padding = alignedFreeOffset - _freeOffset;
+
+            // Free regions:
+            // - Aligned free offset to end (minimum free size - padding)
+            // - 0 to _freeOffset + freeSize wrapped (only if free area contains 0)
+
+            int endOffset = (_freeOffset + _freeSize) & (BufferSize - 1);
+
+            return Math.Max(
+                Math.Min(_freeSize - padding, BufferSize - alignedFreeOffset), 
+                endOffset < _freeOffset ? Math.Min(_freeSize, endOffset) : 0
+                );
+        }
+
+        /// <summary>
+        /// Reserve a range on the staging buffer for the current command buffer and upload data to it.
+        /// </summary>
+        /// <param name="cbs">Command buffer to reserve the data on</param>
+        /// <param name="data">The data to upload</param>
+        /// <param name="alignment">The required alignment for the buffer offset</param>
+        /// <returns>The reserved range of the staging buffer</returns>
+        public unsafe StagingBufferReserved? TryReserveData(CommandBufferScoped cbs, ReadOnlySpan<byte> data, int alignment = 256)
+        {
+            if (data.Length > BufferSize)
+            {
+                return null;
+            }
+
+            // Temporary reserved data cannot be fragmented.
+
+            if (GetContiguousFreeSize(alignment) < data.Length)
+            {
+                FreeCompleted();
+
+                if (GetContiguousFreeSize(alignment) < data.Length)
+                {
+                    return null;
+                }
+            }
+
+            return ReserveDataImpl(cbs, data, alignment);
         }
 
         private bool WaitFreeCompleted(CommandBufferPool cbp)
