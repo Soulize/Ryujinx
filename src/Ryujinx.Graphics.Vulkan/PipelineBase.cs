@@ -184,7 +184,7 @@ namespace Ryujinx.Graphics.Vulkan
         {
             EndRenderPass();
 
-            var dst = Gd.BufferManager.GetBuffer(CommandBuffer, destination, offset, size, true).Get(Cbs, offset, size).Value;
+            var dst = Gd.BufferManager.GetBuffer(CommandBuffer, destination, offset, size, true).Get(Cbs, offset, size, true).Value;
 
             BufferHolder.InsertBufferBarrier(
                 Gd,
@@ -601,7 +601,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             var buffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
-                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, false).Value;
 
             Gd.Api.CmdDrawIndirect(CommandBuffer, buffer, (ulong)indirectBuffer.Offset, 1, (uint)indirectBuffer.Size);
         }
@@ -628,11 +628,11 @@ namespace Ryujinx.Graphics.Vulkan
 
             var buffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
-                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, false).Value;
 
             var countBuffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, parameterBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, false)
-                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size).Value;
+                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size, false).Value;
 
             Gd.DrawIndirectCountApi.CmdDrawIndirectCount(
                 CommandBuffer,
@@ -704,6 +704,26 @@ namespace Ryujinx.Graphics.Vulkan
         public bool IsCommandBufferActive(CommandBuffer cb)
         {
             return CommandBuffer.Handle == cb.Handle;
+        }
+
+        internal void Rebind(Auto<DisposableBuffer> buffer, int offset, int size)
+        {
+            _descriptorSetUpdater.Rebind(buffer, offset, size);
+
+            /*
+            if (_indexBuffer.Overlaps(buffer, offset, size))
+            {
+                _indexBuffer.BindIndexBuffer(Gd, Cbs);
+            }
+            */
+
+            for (int i = 0; i < _vertexBuffers.Length; i++)
+            {
+                if (_vertexBuffers[i].Overlaps(buffer, offset, size))
+                {
+                    _vertexBuffers[i].BindVertexBuffer(Gd, Cbs, (uint)i, ref _newState);
+                }
+            }
         }
 
         public void SetAlphaTest(bool enable, float reference, GAL.CompareOp op)
