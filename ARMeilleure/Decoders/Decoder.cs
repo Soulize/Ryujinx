@@ -159,6 +159,31 @@ namespace ARMeilleure.Decoders
             }
         }
 
+        public static bool DetectThunk(IMemoryManager memory, ulong address, ExecutionMode mode, out ulong targetAddress, out ulong thunkSize)
+        {
+            // The "thunks" this method detects are small blocks of code that just redirect calls to some other location.
+            // When this happens, it is faster and uses less JIT cache to skip it and call that function directly,
+            // as translating the function for each thunk entry point will duplicate code in the cache,
+            // and translating a single jump would result in an additional function lookup at runtime.
+
+            // The only skippable type of thunk is an unconditional jump to an immediate address, as that doesn't touch any registers.
+
+            OpCode opCode = DecodeOpCode(memory, address, mode);
+
+            if (IsUnconditionalBranch(opCode) && !IsCall(opCode) && opCode is IOpCodeBImm branch)
+            {
+                targetAddress = (ulong)branch.Immediate;
+                thunkSize = (ulong)opCode.OpCodeSizeInBytes;
+
+                return true;
+            }
+
+            targetAddress = 0;
+            thunkSize = 0;
+
+            return false;
+        }
+
         public static bool BinarySearch(List<Block> blocks, ulong address, out int index)
         {
             index = 0;

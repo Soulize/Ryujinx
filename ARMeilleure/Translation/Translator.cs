@@ -230,11 +230,14 @@ namespace ARMeilleure.Translation
 
                 if (oldFunc != func)
                 {
-                    JitCache.Unmap(func.FuncPtr);
+                    if (!func.IsView)
+                    {
+                        JitCache.Unmap(func.FuncPtr);
+                    }
                     func = oldFunc;
                 }
 
-                if (PtcProfiler.Enabled)
+                if (PtcProfiler.Enabled && !func.IsView)
                 {
                     PtcProfiler.AddEntry(address, mode, highCq: false);
                 }
@@ -265,6 +268,13 @@ namespace ARMeilleure.Translation
                 mode: Aarch32Mode.User);
 
             Logger.StartPass(PassName.Decoding);
+
+            if (Decoder.DetectThunk(Memory, address, mode, out ulong targetAddress, out ulong thunkSize))
+            {
+                Logger.EndPass(PassName.Decoding);
+
+                return GetOrTranslate(targetAddress, mode).CreateView(address, thunkSize);
+            }
 
             Block[] blocks = Decoder.Decode(Memory, address, mode, highCq, singleStep ? DecoderMode.SingleInstruction : DecoderMode.MultipleBlocks);
 
@@ -525,18 +535,24 @@ namespace ARMeilleure.Translation
 
             foreach (var func in functions)
             {
-                JitCache.Unmap(func.FuncPtr);
+                if (!func.IsView)
+                {
+                    JitCache.Unmap(func.FuncPtr);
 
-                func.CallCounter?.Dispose();
+                    func.CallCounter?.Dispose();
+                }
             }
 
             Functions.Clear();
 
             while (_oldFuncs.TryDequeue(out var kv))
             {
-                JitCache.Unmap(kv.Value.FuncPtr);
+                if (!kv.Value.IsView)
+                {
+                    JitCache.Unmap(kv.Value.FuncPtr);
 
-                kv.Value.CallCounter?.Dispose();
+                    kv.Value.CallCounter?.Dispose();
+                }
             }
         }
 
