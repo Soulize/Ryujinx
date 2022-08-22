@@ -400,8 +400,13 @@ namespace Ryujinx.Graphics.Vulkan
 
                     if (!_uniformSet[0])
                     {
-                        _cachedSupportBuffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, _pipeline.SupportBufferUpdater.Handle, false).Get(cbs, supportBufferOffset, SupportBuffer.RequiredSize).Value;
+                        _cachedSupportBuffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, _pipeline.SupportBufferUpdater.Handle, false).GetMirrorable(cbs, ref supportBufferOffset, SupportBuffer.RequiredSize).Value;
                         _uniformSet[0] = true;
+                        _uniformBufferOffsets[0] = supportBufferOffset;
+                    }
+                    else
+                    {
+                        supportBufferOffset = _uniformBufferOffsets[0];
                     }
 
                     uniformBuffer[0] = new DescriptorBufferInfo()
