@@ -14,11 +14,13 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
         {
             public IKFutureSchedulerObject Object { get; }
             public long TimePoint { get; }
+            public ulong Millisecond { get; }
 
-            public WaitingObject(IKFutureSchedulerObject schedulerObj, long timePoint)
+            public WaitingObject(IKFutureSchedulerObject schedulerObj, long timePoint, ulong millisecond)
             {
-                Object    = schedulerObj;
+                Object = schedulerObj;
                 TimePoint = timePoint;
+                Millisecond = millisecond;
             }
         }
 
@@ -28,11 +30,14 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
         private bool _keepRunning;
         private long _enforceWakeupFromSpinWait;
 
+        private MillisecondClock _clock;
+
         public KTimeManager(KernelContext context)
         {
             _context = context;
             _waitingObjects = new List<WaitingObject>();
             _keepRunning = true;
+            _clock = new MillisecondClock();
 
             Thread work = new Thread(WaitAndCheckScheduledObjects)
             {
@@ -48,7 +53,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
 
             lock (_context.CriticalSection.Lock)
             {
-                _waitingObjects.Add(new WaitingObject(schedulerObj, timePoint));
+                _waitingObjects.Add(new WaitingObject(schedulerObj, timePoint, _clock.GetTargetMs(timePoint)));
 
                 if (timeout < 1000000)
                 {
@@ -56,7 +61,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
                 }
             }
 
-            _waitEvent.Set();
+            _clock.Interrupt();
         }
 
         public void UnscheduleFutureInvocation(IKFutureSchedulerObject schedulerObj)
@@ -72,64 +77,59 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
             SpinWait spinWait = new SpinWait();
             WaitingObject next;
 
-            using (_waitEvent = new AutoResetEvent(false))
+            while (_keepRunning)
             {
-                while (_keepRunning)
+                lock (_context.CriticalSection.Lock)
                 {
-                    lock (_context.CriticalSection.Lock)
-                    {
-                        Interlocked.Exchange(ref _enforceWakeupFromSpinWait, 0);
+                    Interlocked.Exchange(ref _enforceWakeupFromSpinWait, 0);
 
-                        next = _waitingObjects.OrderBy(x => x.TimePoint).FirstOrDefault();
+                    next = _waitingObjects.OrderBy(x => x.TimePoint).FirstOrDefault();
+                }
+
+                if (next != null)
+                {
+                    long timePoint = PerformanceCounter.ElapsedTicks;
+
+                    if (next.TimePoint > timePoint)
+                    {
+                        if (_clock.WaitForMs(next.Millisecond))
+                        {
+                            // If waiting returns true, not long is left until the timepoint. Spin for the remainder.
+
+                            long remaining = next.TimePoint - PerformanceCounter.ElapsedTicks;
+
+                            while (Interlocked.Read(ref _enforceWakeupFromSpinWait) != 1 && PerformanceCounter.ElapsedTicks <= next.TimePoint)
+                            {
+                                if (spinWait.NextSpinWillYield)
+                                {
+                                    Thread.Yield();
+
+                                    spinWait.Reset();
+                                }
+
+                                spinWait.SpinOnce();
+                            }
+
+                            spinWait.Reset();
+                        }
                     }
 
-                    if (next != null)
+                    bool timeUp = PerformanceCounter.ElapsedTicks >= next.TimePoint;
+
+                    if (timeUp)
                     {
-                        long timePoint = PerformanceCounter.ElapsedTicks;
-
-                        if (next.TimePoint > timePoint)
+                        lock (_context.CriticalSection.Lock)
                         {
-                            long ms = Math.Min((next.TimePoint - timePoint) / PerformanceCounter.TicksPerMillisecond, int.MaxValue);
-
-                            if (ms > 0)
+                            if (_waitingObjects.Remove(next))
                             {
-                                _waitEvent.WaitOne((int)ms);
-                            }
-                            else
-                            {
-                                while (Interlocked.Read(ref _enforceWakeupFromSpinWait) != 1 && PerformanceCounter.ElapsedTicks <= next.TimePoint)
-                                {
-                                    if (spinWait.NextSpinWillYield)
-                                    {
-                                        Thread.Yield();
-
-                                        spinWait.Reset();
-                                    }
-
-                                    spinWait.SpinOnce();
-                                }
-
-                                spinWait.Reset();
-                            }
-                        }
-
-                        bool timeUp = PerformanceCounter.ElapsedTicks >= next.TimePoint;
-
-                        if (timeUp)
-                        {
-                            lock (_context.CriticalSection.Lock)
-                            {
-                                if (_waitingObjects.Remove(next))
-                                {
-                                    next.Object.TimeUp();
-                                }
+                                next.Object.TimeUp();
                             }
                         }
                     }
-                    else
-                    {
-                        _waitEvent.WaitOne();
-                    }
+                }
+                else
+                {
+                    _clock.WaitAny();
                 }
             }
         }
@@ -175,7 +175,8 @@ namespace Ryujinx.HLE.HOS.Kernel.Common
         public void Dispose()
         {
             _keepRunning = false;
-            _waitEvent?.Set();
+            _clock.Interrupt();
+            _clock.Dispose();
         }
     }
 }
