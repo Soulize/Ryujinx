@@ -132,7 +132,7 @@ namespace Ryujinx.Graphics.Vulkan
                 (region[2], region[3]) = (region[3], region[2]);
             }
 
-            var bufferHandle = gd.BufferManager.CreateWithHandle(gd, RegionBufferSize, false);
+            var bufferHandle = gd.BufferManager.CreateWithHandle(gd, RegionBufferSize);
 
             gd.BufferManager.SetData<float>(bufferHandle, 0, region);
 
@@ -199,7 +199,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             _pipeline.SetCommandBuffer(cbs);
 
-            var bufferHandle = gd.BufferManager.CreateWithHandle(gd, ClearColorBufferSize, false);
+            var bufferHandle = gd.BufferManager.CreateWithHandle(gd, ClearColorBufferSize);
 
             gd.BufferManager.SetData<float>(bufferHandle, 0, clearColor);
 
@@ -265,7 +265,7 @@ namespace Ryujinx.Graphics.Vulkan
                 (region[2], region[3]) = (region[3], region[2]);
             }
 
-            var bufferHandle = gd.BufferManager.CreateWithHandle(gd, RegionBufferSize, false);
+            var bufferHandle = gd.BufferManager.CreateWithHandle(gd, RegionBufferSize);
 
             gd.BufferManager.SetData<float>(bufferHandle, 0, region);
 
@@ -345,7 +345,7 @@ namespace Ryujinx.Graphics.Vulkan
                 shaderParams[2] = size;
                 shaderParams[3] = srcOffset;
 
-                var bufferHandle = gd.BufferManager.CreateWithHandle(gd, ParamsBufferSize, false);
+                var bufferHandle = gd.BufferManager.CreateWithHandle(gd, ParamsBufferSize);
 
                 gd.BufferManager.SetData<int>(bufferHandle, 0, shaderParams);
 
