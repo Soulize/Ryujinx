@@ -19,7 +19,7 @@ namespace Ryujinx.Graphics.Vulkan
         protected readonly Device Device;
         public readonly PipelineCache PipelineCache;
 
-        protected readonly AutoFlushCounter AutoFlush;
+        public readonly AutoFlushCounter AutoFlush;
 
         protected PipelineDynamicState DynamicState;
         private PipelineState _newState;
