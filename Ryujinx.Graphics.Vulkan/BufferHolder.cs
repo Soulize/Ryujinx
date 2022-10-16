@@ -119,7 +119,7 @@ namespace Ryujinx.Graphics.Vulkan
         {
             // Does this binding need to be mirrored?
 
-            if (!_pendingDataRanges.OverlapsWith(0, offset, size))
+            if (!_pendingDataRanges.OverlapsWith(offset, size))
             {
                 buffer = null;
                 return false;
@@ -145,7 +145,7 @@ namespace Ryujinx.Graphics.Vulkan
             if (newMirror != null)
             {
                 var mirror = newMirror.Value;
-                _pendingDataRanges.FillData(0, baseData, modData, offset, new Span<byte>((void*)(mirror.Buffer._map + mirror.Offset), size));
+                _pendingDataRanges.FillData(baseData, modData, offset, new Span<byte>((void*)(mirror.Buffer._map + mirror.Offset), size));
 
                 if (_mirrors.Count == 0)
                 {
@@ -226,7 +226,7 @@ namespace Ryujinx.Graphics.Vulkan
                 bool hadMirrors = _mirrors.Count > 0;
                 _mirrors.Clear();
 
-                if (_pendingDataRanges.Count(0) != 0)
+                if (_pendingDataRanges.Count() != 0)
                 {
                     UploadPendingData(cbs, offset, size);
                 }
@@ -240,7 +240,7 @@ namespace Ryujinx.Graphics.Vulkan
 
         private void UploadPendingData(CommandBufferScoped cbs, int offset, int size)
         {
-            var ranges = _pendingDataRanges.All(0);
+            var ranges = _pendingDataRanges.All();
 
             // TODO: within range. for now it just clears everything.
 
@@ -248,7 +248,7 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 var rangeCopy = ranges.ToArray();
 
-                _pendingDataRanges.Clear(0);
+                _pendingDataRanges.Clear();
 
                 foreach (var range in rangeCopy)
                 {
@@ -378,7 +378,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                     if (_pendingData != null)
                     {
-                        bool removed = _pendingDataRanges.Remove(0, offset, dataSize);
+                        bool removed = _pendingDataRanges.Remove(offset, dataSize);
                         if (RemoveOverlappingMirrors(offset, dataSize) || removed)
                         {
                             // If any mirrors were removed, rebind the buffer range.
@@ -398,12 +398,11 @@ namespace Ryujinx.Graphics.Vulkan
                 if (_pendingData == null)
                 {
                     _pendingData = new byte[Size];
-                    _pendingDataRanges.Initialize();
                     _mirrors = new Dictionary<ulong, StagingBufferReserved>();
                 }
 
                 data.Slice(0, dataSize).CopyTo(_pendingData.AsSpan(offset, dataSize));
-                _pendingDataRanges.Add(0, offset, dataSize);
+                _pendingDataRanges.Add(offset, dataSize);
 
                 // Remove any overlapping mirrors.
                 RemoveOverlappingMirrors(offset, dataSize);
@@ -416,7 +415,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             if (_pendingData != null)
             {
-                _pendingDataRanges.Remove(0, offset, dataSize);
+                _pendingDataRanges.Remove(offset, dataSize);
             }
 
             if (cbs != null && !(_buffer.HasCommandBufferDependency(cbs.Value) && _waitable.IsBufferRangeInUse(cbs.Value.CommandBufferIndex, offset, dataSize)))
