@@ -9,6 +9,8 @@ namespace Ryujinx.Graphics.Vulkan
 {
     class DescriptorSetUpdater
     {
+        private static int StorageBufferMaxMirrorable = 8192;
+
         private readonly VulkanRenderer _gd;
         private readonly PipelineBase _pipeline;
         private ShaderCollection _program;
@@ -35,6 +37,8 @@ namespace Ryujinx.Graphics.Vulkan
 
         private int[] _uniformBufferOffsets;
         private int[] _storageBufferOffsets;
+
+        private bool[] _storageBufferWrite;
 
         [Flags]
         private enum DirtyFlags
@@ -101,6 +105,8 @@ namespace Ryujinx.Graphics.Vulkan
 
             _uniformBufferOffsets = new int[Constants.MaxStorageBufferBindings];
             _storageBufferOffsets = new int[Constants.MaxStorageBufferBindings];
+
+            _storageBufferWrite = new bool[Constants.MaxStorageBufferBindings];
 
             _dummyTexture = gd.CreateTextureView(new GAL.TextureCreateInfo(
                 1,
@@ -186,6 +192,30 @@ namespace Ryujinx.Graphics.Vulkan
                     }
                 }
             }
+
+            int storageStagesCount = _program.Bindings[PipelineBase.StorageSetIndex].Length;
+
+            for (int i = 0; i < storageStagesCount; i++)
+            {
+                int[] stageBindings = _program.Bindings[PipelineBase.StorageSetIndex][i];
+
+                for (int j = 0; j < stageBindings.Length; j++)
+                {
+                    int binding = stageBindings[j];
+
+                    if (binding < _storageBufferRefs.Length && _storageBufferRefs[binding] == buffer)
+                    {
+                        ref DescriptorBufferInfo info = ref _storageBuffers[binding];
+                        int bindingOffset = _storageBufferOffsets[binding];
+
+                        if (BindingOverlaps(ref info, bindingOffset, offset, size))
+                        {
+                            _storageSet[binding] = false;
+                            SignalDirty(DirtyFlags.Storage);
+                        }
+                    }
+                }
+            }
         }
 
         public void SetProgram(ShaderCollection program)
@@ -221,7 +251,7 @@ namespace Ryujinx.Graphics.Vulkan
                 int index = first + i;
                 var buffer = buffers[i];
 
-                Auto<DisposableBuffer> vkBuffer = _gd.BufferManager.GetBuffer(commandBuffer, buffer.Handle, false);
+                Auto<DisposableBuffer> vkBuffer = _gd.BufferManager.GetBuffer(commandBuffer, buffer.Handle, buffer.Write);
                 ref Auto<DisposableBuffer> currentVkBuffer = ref _storageBufferRefs[index];
 
                 DescriptorBufferInfo info = new DescriptorBufferInfo()
@@ -235,6 +265,7 @@ namespace Ryujinx.Graphics.Vulkan
                 if (vkBuffer != currentVkBuffer || currentInfo.Offset != info.Offset || currentInfo.Range != info.Range)
                 {
                     _storageSet[index] = false;
+                    _storageBufferWrite[index] = buffer.Write;
 
                     currentInfo = info;
                     currentVkBuffer = vkBuffer;
@@ -264,9 +295,11 @@ namespace Ryujinx.Graphics.Vulkan
                 if (vkBuffer != currentVkBuffer || currentInfo.Offset != info.Offset || currentInfo.Range != info.Range)
                 {
                     _storageSet[index] = false;
+                    _storageBufferWrite[index] = true;
 
                     currentInfo = info;
                     currentVkBuffer = vkBuffer;
+                    _storageBufferOffsets[index] = 0;
                 }
             }
 
@@ -489,7 +522,9 @@ namespace Ryujinx.Graphics.Vulkan
 
                             if (!_storageSet[index])
                             {
-                                UpdateBuffer(cbs, _storageBufferOffsets[index], ref _storageBuffers[index], _storageBufferRefs[index], dummyBuffer, false);
+                                ref var info = ref _storageBuffers[index];
+
+                                UpdateBuffer(cbs, _storageBufferOffsets[index], ref info, _storageBufferRefs[index], dummyBuffer, _storageBufferWrite[index] && info.Range <= (ulong)StorageBufferMaxMirrorable);
 
                                 _storageSet[index] = true;
                             }
