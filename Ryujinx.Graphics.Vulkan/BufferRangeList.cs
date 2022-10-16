@@ -22,21 +22,16 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
-        private List<Range>[] _ranges;
+        private List<Range> _ranges;
 
-        public void Initialize()
+        public List<Range> All()
         {
-            _ranges = new List<Range>[CommandBufferPool.MaxCommandBuffers];
+            return _ranges;
         }
 
-        public List<Range> All(int cbIndex)
+        public bool Remove(int offset, int size)
         {
-            return _ranges[cbIndex];
-        }
-
-        public bool Remove(int cbIndex, int offset, int size)
-        {
-            var list = _ranges[cbIndex];
+            var list = _ranges;
             bool removedAny = false;
             if (list != null)
             {
@@ -92,9 +87,9 @@ namespace Ryujinx.Graphics.Vulkan
             return removedAny;
         }
 
-        public void Add(int cbIndex, int offset, int size)
+        public void Add(int offset, int size)
         {
-            var list = _ranges[cbIndex];
+            var list = _ranges;
             if (list != null)
             {
                 int overlapIndex = BinarySearch(list, offset, size);
@@ -152,18 +147,16 @@ namespace Ryujinx.Graphics.Vulkan
             }
             else
             {
-                list = new List<Range>
+                _ranges = new List<Range>
                 {
                     new Range(offset, size)
                 };
-
-                _ranges[cbIndex] = list;
             }
         }
 
-        public bool OverlapsWith(int cbIndex, int offset, int size)
+        public bool OverlapsWith(int offset, int size)
         {
-            var list = _ranges[cbIndex];
+            var list = _ranges;
             if (list == null)
             {
                 return false;
@@ -203,12 +196,12 @@ namespace Ryujinx.Graphics.Vulkan
             return ~left;
         }
 
-        public void FillData(int cbIndex, Span<byte> baseData, Span<byte> modData, int offset, Span<byte> result)
+        public void FillData(Span<byte> baseData, Span<byte> modData, int offset, Span<byte> result)
         {
             int size = baseData.Length;
             int endOffset = offset + size;
 
-            var list = _ranges[cbIndex];
+            var list = _ranges;
             if (list == null)
             {
                 baseData.CopyTo(result);
@@ -267,14 +260,14 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
-        public int Count(int cbIndex)
+        public int Count()
         {
-            return _ranges[cbIndex]?.Count ?? 0;
+            return _ranges?.Count ?? 0;
         }
 
-        public void Clear(int cbIndex)
+        public void Clear()
         {
-            _ranges[cbIndex] = null;
+            _ranges = null;
         }
     }
 }
