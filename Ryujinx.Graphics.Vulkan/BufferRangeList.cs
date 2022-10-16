@@ -23,12 +23,10 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         private List<Range>[] _ranges;
-        private byte[] _tempData;
 
         public void Initialize()
         {
             _ranges = new List<Range>[CommandBufferPool.MaxCommandBuffers];
-            _tempData = Array.Empty<byte>();
         }
 
         public List<Range> All(int cbIndex)
@@ -205,7 +203,7 @@ namespace Ryujinx.Graphics.Vulkan
             return ~left;
         }
 
-        public Span<byte> FillData(int cbIndex, Span<byte> baseData, Span<byte> modData, int offset)
+        public void FillData(int cbIndex, Span<byte> baseData, Span<byte> modData, int offset, Span<byte> result)
         {
             int size = baseData.Length;
             int endOffset = offset + size;
@@ -213,15 +211,8 @@ namespace Ryujinx.Graphics.Vulkan
             var list = _ranges[cbIndex];
             if (list == null)
             {
-                return baseData;
+                baseData.CopyTo(result);
             }
-
-            if (_tempData.Length < size)
-            {
-                Array.Resize(ref _tempData, size);
-            }
-
-            Span<byte> result = _tempData;
 
             int srcOffset = offset;
             int dstOffset = 0;
@@ -274,8 +265,6 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 baseData.Slice(dstOffset, baseSizeEnd).CopyTo(result.Slice(dstOffset, baseSizeEnd));
             }
-
-            return result;
         }
 
         public int Count(int cbIndex)

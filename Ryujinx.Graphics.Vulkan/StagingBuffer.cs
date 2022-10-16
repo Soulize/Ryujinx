@@ -152,21 +152,19 @@ namespace Ryujinx.Graphics.Vulkan
             return true;
         }
 
-        private StagingBufferReserved ReserveDataImpl(CommandBufferScoped cbs, ReadOnlySpan<byte> data, int alignment)
+        private StagingBufferReserved ReserveDataImpl(CommandBufferScoped cbs, int size, int alignment)
         {
             // Assumes the caller has already determined that there is enough space.
             int offset = BitUtils.AlignUp(_freeOffset, alignment);
             int padding = offset - _freeOffset;
 
             int capacity = Math.Min(_freeSize, BufferSize - offset);
-            int reservedLength = data.Length + padding;
-            if (capacity < data.Length)
+            int reservedLength = size + padding;
+            if (capacity < size)
             {
                 offset = 0; // Place at start.
                 reservedLength += capacity;
             }
-
-            _buffer.SetDataUnchecked(offset, data);
 
             _freeOffset = (_freeOffset + reservedLength) & (BufferSize - 1);
             _freeSize -= reservedLength;
@@ -174,7 +172,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             _pendingCopies.Enqueue(new PendingCopy(cbs.GetFence(), reservedLength));
 
-            return new StagingBufferReserved(_buffer, offset, data.Length);
+            return new StagingBufferReserved(_buffer, offset, size);
         }
 
         private int GetContiguousFreeSize(int alignment)
@@ -201,26 +199,26 @@ namespace Ryujinx.Graphics.Vulkan
         /// <param name="data">The data to upload</param>
         /// <param name="alignment">The required alignment for the buffer offset</param>
         /// <returns>The reserved range of the staging buffer</returns>
-        public unsafe StagingBufferReserved? TryReserveData(CommandBufferScoped cbs, ReadOnlySpan<byte> data, int alignment = 256)
+        public unsafe StagingBufferReserved? TryReserveData(CommandBufferScoped cbs, int size, int alignment = 256)
         {
-            if (data.Length > BufferSize)
+            if (size > BufferSize)
             {
                 return null;
             }
 
             // Temporary reserved data cannot be fragmented.
 
-            if (GetContiguousFreeSize(alignment) < data.Length)
+            if (GetContiguousFreeSize(alignment) < size)
             {
                 FreeCompleted();
 
-                if (GetContiguousFreeSize(alignment) < data.Length)
+                if (GetContiguousFreeSize(alignment) < size)
                 {
                     return null;
                 }
             }
 
-            return ReserveDataImpl(cbs, data, alignment);
+            return ReserveDataImpl(cbs, size, alignment);
         }
 
         private bool WaitFreeCompleted(CommandBufferPool cbp)

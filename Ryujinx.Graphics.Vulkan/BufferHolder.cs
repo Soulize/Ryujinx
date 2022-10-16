@@ -140,21 +140,22 @@ namespace Ryujinx.Graphics.Vulkan
             var baseData = new Span<byte>((void*)(_map + offset), size);
             var modData = _pendingData.AsSpan(offset, size);
 
-            Span<byte> mirrorData = _pendingDataRanges.FillData(0, baseData, modData, offset);
-
-            StagingBufferReserved? newMirror = _gd.BufferManager.StagingBuffer.TryReserveData(cbs, mirrorData);
+            StagingBufferReserved? newMirror = _gd.BufferManager.StagingBuffer.TryReserveData(cbs, size);
 
             if (newMirror != null)
             {
+                var mirror = newMirror.Value;
+                _pendingDataRanges.FillData(0, baseData, modData, offset, new Span<byte>((void*)(mirror.Buffer._map + mirror.Offset), size));
+
                 if (_mirrors.Count == 0)
                 {
                     _gd.PipelineInternal.RegisterActiveMirror(this);
                 }
 
-                _mirrors.Add(key, newMirror.Value);
+                _mirrors.Add(key, mirror);
 
-                buffer = newMirror.Value.Buffer.GetBuffer();
-                offset = newMirror.Value.Offset;
+                buffer = mirror.Buffer.GetBuffer();
+                offset = mirror.Offset;
 
                 return true;
             }
