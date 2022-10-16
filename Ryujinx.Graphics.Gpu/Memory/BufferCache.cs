@@ -347,7 +347,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <returns>The buffer sub-range starting at the given memory address</returns>
         public BufferRange GetBufferRangeTillEnd(ulong address, ulong size, bool write = false)
         {
-            return GetBuffer(address, size, write).GetRange(address);
+            return GetBuffer(address, size, write).GetRange(address, write);
         }
 
         /// <summary>
@@ -359,7 +359,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <returns>The buffer sub-range for the given range</returns>
         public BufferRange GetBufferRange(ulong address, ulong size, bool write = false)
         {
-            return GetBuffer(address, size, write).GetRange(address, size);
+            return GetBuffer(address, size, write).GetRange(address, size, write);
         }
 
         /// <summary>
