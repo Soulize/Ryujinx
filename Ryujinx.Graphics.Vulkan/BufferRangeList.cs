@@ -23,10 +23,12 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         private List<Range>[] _ranges;
+        private byte[] _tempData;
 
         public void Initialize()
         {
             _ranges = new List<Range>[CommandBufferPool.MaxCommandBuffers];
+            _tempData = Array.Empty<byte>();
         }
 
         public List<Range> All(int cbIndex)
@@ -214,7 +216,12 @@ namespace Ryujinx.Graphics.Vulkan
                 return baseData;
             }
 
-            Span<byte> result = new byte[size];
+            if (_tempData.Length < size)
+            {
+                Array.Resize(ref _tempData, size);
+            }
+
+            Span<byte> result = _tempData;
 
             int srcOffset = offset;
             int dstOffset = 0;

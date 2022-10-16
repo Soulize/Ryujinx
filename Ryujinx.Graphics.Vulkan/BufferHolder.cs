@@ -39,7 +39,7 @@ namespace Ryujinx.Graphics.Vulkan
 
         private byte[] _pendingData;
         private BufferRangeList _pendingDataRanges;
-        private Dictionary<Tuple<int, int>, StagingBufferReserved> _mirrors;
+        private Dictionary<ulong, StagingBufferReserved> _mirrors;
 
 
         public BufferHolder(VulkanRenderer gd, Device device, VkBuffer buffer, MemoryAllocation allocation, int size)
@@ -105,6 +105,16 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
+        private ulong ToMirrorKey(int offset, int size)
+        {
+            return ((ulong)offset << 32) | (uint)size;
+        }
+
+        private (int offset, int size) FromMirrorKey(ulong key)
+        {
+            return ((int)(key >> 32), (int)key);
+        }
+
         private unsafe bool TryGetMirror(CommandBufferScoped cbs, ref int offset, int size, out Auto<DisposableBuffer> buffer)
         {
             // Does this binding need to be mirrored?
@@ -115,7 +125,7 @@ namespace Ryujinx.Graphics.Vulkan
                 return false;
             }
 
-            var key = new Tuple<int, int>(offset, size);
+            var key = ToMirrorKey(offset, size);
 
             if (_mirrors.TryGetValue(key, out StagingBufferReserved reserved))
             {
@@ -313,14 +323,15 @@ namespace Ryujinx.Graphics.Vulkan
 
         public bool RemoveOverlappingMirrors(int offset, int size)
         {
-            List<Tuple<int, int>> toRemove = null;
+            List<ulong> toRemove = null;
             foreach (var key in _mirrors.Keys)
             {
-                if (!(offset + size <= key.Item1 || offset >= key.Item1 + key.Item2))
+                (int keyOffset, int keySize) = FromMirrorKey(key);
+                if (!(offset + size <= keyOffset || offset >= keyOffset + keySize))
                 {
                     if (toRemove == null)
                     {
-                        toRemove = new List<Tuple<int, int>>();
+                        toRemove = new List<ulong>();
                     }
 
                     toRemove.Add(key);
@@ -387,7 +398,7 @@ namespace Ryujinx.Graphics.Vulkan
                 {
                     _pendingData = new byte[Size];
                     _pendingDataRanges.Initialize();
-                    _mirrors = new Dictionary<Tuple<int, int>, StagingBufferReserved>();
+                    _mirrors = new Dictionary<ulong, StagingBufferReserved>();
                 }
 
                 data.Slice(0, dataSize).CopyTo(_pendingData.AsSpan(offset, dataSize));
