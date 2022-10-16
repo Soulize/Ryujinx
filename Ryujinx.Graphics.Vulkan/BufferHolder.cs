@@ -364,8 +364,6 @@ namespace Ryujinx.Graphics.Vulkan
 
                     data.Slice(0, dataSize).CopyTo(new Span<byte>((void*)(_map + offset), dataSize));
 
-                    SignalWrite(offset, dataSize);
-
                     if (_pendingData != null)
                     {
                         bool removed = _pendingDataRanges.Remove(0, offset, dataSize);
@@ -375,6 +373,8 @@ namespace Ryujinx.Graphics.Vulkan
                             _gd.PipelineInternal.Rebind(_buffer, offset, dataSize);
                         }
                     }
+
+                    SignalWrite(offset, dataSize);
 
                     return;
                 }
