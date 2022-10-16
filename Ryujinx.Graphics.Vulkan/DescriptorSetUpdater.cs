@@ -410,7 +410,8 @@ namespace Ryujinx.Graphics.Vulkan
             ref DescriptorBufferInfo info,
             Auto<DisposableBuffer> buffer,
             Auto<DisposableBuffer> dummyBuffer,
-            bool mirrorable)
+            bool mirrorable,
+            bool write = false)
         {
             if (mirrorable)
             {
@@ -418,7 +419,7 @@ namespace Ryujinx.Graphics.Vulkan
             }
             else
             {
-                info.Buffer = buffer?.Get(cbs, offset, (int)info.Range).Value ?? default;
+                info.Buffer = buffer?.Get(cbs, offset, (int)info.Range, write).Value ?? default;
             }
 
             info.Offset = (ulong)offset;
@@ -523,8 +524,15 @@ namespace Ryujinx.Graphics.Vulkan
                             if (!_storageSet[index])
                             {
                                 ref var info = ref _storageBuffers[index];
+                                bool write = _storageBufferWrite[index];
 
-                                UpdateBuffer(cbs, _storageBufferOffsets[index], ref info, _storageBufferRefs[index], dummyBuffer, _storageBufferWrite[index] && info.Range <= (ulong)StorageBufferMaxMirrorable);
+                                UpdateBuffer(cbs, 
+                                    _storageBufferOffsets[index], 
+                                    ref info, 
+                                    _storageBufferRefs[index], 
+                                    dummyBuffer, 
+                                    write && info.Range <= (ulong)StorageBufferMaxMirrorable,
+                                    write);
 
                                 _storageSet[index] = true;
                             }
