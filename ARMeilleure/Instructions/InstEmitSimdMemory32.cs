@@ -51,6 +51,34 @@ namespace ARMeilleure.Instructions
             EmitVStoreOrLoadN(context, 4, false);
         }
 
+        public static void EmitEndianSwap(ArmEmitterContext context, Operand vReg)
+        {
+            Operand lblEnd = Label();
+
+            context.BranchIfFalse(lblEnd, GetFlag(PState.EFlag));
+
+            // Swap each word of the double words.
+
+            Operand result;
+            if (Optimizations.UseSse2)
+            {
+                int shuffleMask = (2 << 6) | (3 << 4) | (0 << 2) | 1;
+
+                result = context.AddIntrinsic(Intrinsic.X86Shufps, vReg, vReg, Const(shuffleMask));
+            }
+            else
+            {
+                result = context.VectorCreateScalar(context.VectorExtract(OperandType.I32, vReg, 1));
+                result = context.VectorInsert(result, context.VectorExtract(OperandType.I32, vReg, 0), 1);
+                result = context.VectorInsert(result, context.VectorExtract(OperandType.I32, vReg, 3), 2);
+                result = context.VectorInsert(result, context.VectorExtract(OperandType.I32, vReg, 2), 3);
+            }
+
+            context.Copy(vReg, result);
+
+            context.MarkLabel(lblEnd);
+        }
+
         public static void EmitVStoreOrLoadN(ArmEmitterContext context, int count, bool load)
         {
             if (context.CurrOp is OpCode32SimdMemSingle)
@@ -138,42 +166,86 @@ namespace ARMeilleure.Instructions
                 int offset = 0;
                 int d = op.Vd;
 
-                for (int reg = 0; reg < op.Regs; reg++)
+                int totalBytes = op.Regs * op.Elems * eBytes;
+
+                if (count == 1 && (d & 1) == 0 && (totalBytes & 15) == 0)
                 {
-                    for (int elem = 0; elem < op.Elems; elem++)
+                    // Accessing whole vectors.
+
+                    int vecCount = totalBytes >> 4;
+                    int vecQ = d >> 1;
+
+                    for (int vec = 0; vec < vecCount; vec++)
                     {
-                        int elemD = d + reg;
-                        for (int i = 0; i < count; i++)
+                        Operand address = context.Add(n, Const(offset));
+
+                        // If dword access, consider endian swap.
+
+                        if (load)
                         {
-                            // Accesses an element from a double simd register,
-                            // add ebytes for each element.
-                            Operand address = context.Add(n, Const(offset));
-                            int index = ((elemD & 1) << (3 - op.Size)) + elem;
+                            Operand loadVec = GetVecA32(vecQ);
+                            EmitLoadSimd(context, address, loadVec, vecQ, 0, 4);
+
                             if (eBytes == 8)
                             {
-                                if (load)
-                                {
-                                    EmitDVectorLoad(context, address, elemD);
-                                }
-                                else
-                                {
-                                    EmitDVectorStore(context, address, elemD);
-                                }
+                                EmitEndianSwap(context, loadVec);
                             }
-                            else
+                        }
+                        else
+                        {
+                            if (eBytes == 8)
                             {
-                                if (load)
-                                {
-                                    EmitLoadSimd(context, address, GetVecA32(elemD >> 1), elemD >> 1, index, op.Size);
-                                }
-                                else
-                                {
-                                    EmitStoreSimd(context, address, elemD >> 1, index, op.Size);
-                                }
+                                Operand storeVec = GetVecA32(vecQ);
+
+                                EmitEndianSwap(context, storeVec);
                             }
 
-                            offset += eBytes;
-                            elemD += increment;
+                            EmitStoreSimd(context, address, vecQ, 0, 4);
+                        }
+
+                        offset += 16;
+                        vecQ++;
+                    }
+                }
+                else
+                {
+                    for (int reg = 0; reg < op.Regs; reg++)
+                    {
+                        for (int elem = 0; elem < op.Elems; elem++)
+                        {
+                            int elemD = d + reg;
+                            for (int i = 0; i < count; i++)
+                            {
+                                // Accesses an element from a double simd register,
+                                // add ebytes for each element.
+                                Operand address = context.Add(n, Const(offset));
+                                int index = ((elemD & 1) << (3 - op.Size)) + elem;
+                                if (eBytes == 8)
+                                {
+                                    if (load)
+                                    {
+                                        EmitDVectorLoad(context, address, elemD);
+                                    }
+                                    else
+                                    {
+                                        EmitDVectorStore(context, address, elemD);
+                                    }
+                                }
+                                else
+                                {
+                                    if (load)
+                                    {
+                                        EmitLoadSimd(context, address, GetVecA32(elemD >> 1), elemD >> 1, index, op.Size);
+                                    }
+                                    else
+                                    {
+                                        EmitStoreSimd(context, address, elemD >> 1, index, op.Size);
+                                    }
+                                }
+
+                                offset += eBytes;
+                                elemD += increment;
+                            }
                         }
                     }
                 }
@@ -213,6 +285,8 @@ namespace ARMeilleure.Instructions
             int sReg = (op.DoubleWidth) ? (op.Vd << 1) : op.Vd;
             int offset = 0;
             int byteSize = 4;
+
+            Ryujinx.Common.Logging.Logger.Info?.PrintMsg(Ryujinx.Common.Logging.LogClass.Cpu, $"VLDM {range} starting at {sReg}");
 
             for (int num = 0; num < range; num++, sReg++)
             {
@@ -274,8 +348,8 @@ namespace ARMeilleure.Instructions
 
             context.BranchIfTrue(lblBigEndian, GetFlag(PState.EFlag));
 
-            EmitStoreSimd(context, address, vecQ, vecSElem, WordSizeLog2);
-            EmitStoreSimd(context, context.Add(address, Const(4)), vecQ, vecSElem | 1, WordSizeLog2);
+            EmitStoreSimd(context, address, vecQ, vecD & 1, DWordSizeLog2);
+            //EmitStoreSimd(context, context.Add(address, Const(4)), vecQ, vecSElem | 1, WordSizeLog2);
 
             context.Branch(lblEnd);
 
@@ -298,8 +372,8 @@ namespace ARMeilleure.Instructions
 
             context.BranchIfTrue(lblBigEndian, GetFlag(PState.EFlag));
 
-            EmitLoadSimd(context, address, vec, vecQ, vecSElem, WordSizeLog2);
-            EmitLoadSimd(context, context.Add(address, Const(4)), vec, vecQ, vecSElem | 1, WordSizeLog2);
+            EmitLoadSimd(context, address, vec, vecQ, vecD & 1, DWordSizeLog2);
+            //EmitLoadSimd(context, context.Add(address, Const(4)), vec, vecQ, vecSElem | 1, WordSizeLog2);
 
             context.Branch(lblEnd);
 
