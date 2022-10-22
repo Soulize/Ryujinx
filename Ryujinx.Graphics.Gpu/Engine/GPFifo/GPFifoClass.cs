@@ -154,14 +154,15 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 uint threshold = (uint)_state.State.SyncpointaPayload;
 
                 _context.Synchronization.WaitOnSyncpoint(syncpointId, threshold, Timeout.InfiniteTimeSpan);
+
+                // Waiting on the host means they have probably modified some data.
+                _context.AdvanceSequence();
             }
             else if (operation == SyncpointbOperation.Incr)
             {
                 _context.CreateHostSyncIfNeeded(true);
                 _context.Synchronization.IncrementSyncpoint(syncpointId);
             }
-
-            _context.AdvanceSequence();
         }
 
         /// <summary>

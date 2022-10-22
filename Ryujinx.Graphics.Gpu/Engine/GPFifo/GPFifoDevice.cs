@@ -52,6 +52,12 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
             public uint EntryCount;
 
             /// <summary>
+            /// For each command buffer submission, we increment the sync number as guest data may have changed.
+            /// Only do this for the first command buffer in a submission.
+            /// </summary>
+            public bool FirstInSubmission;
+
+            /// <summary>
             /// Fetch the command buffer.
             /// </summary>
             /// <param name="flush">If true, flushes potential GPU written data before reading the command buffer</param>
@@ -155,6 +161,7 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 ulong entry = entries[index];
 
                 CommandBuffer commandBuffer = CreateCommandBuffer(processor, Unsafe.As<ulong, GPEntry>(ref entry));
+                commandBuffer.FirstInSubmission = index == 0;
 
                 if (beforeBarrier && commandBuffer.Type == CommandBufferType.Prefetch)
                 {
@@ -207,6 +214,11 @@ namespace Ryujinx.Graphics.Gpu.Engine.GPFifo
                 {
                     _prevChannelProcessor = entry.Processor;
                     entry.Processor.ForceAllDirty();
+                }
+
+                if (entry.FirstInSubmission)
+                {
+                    _context.AdvanceSequence();
                 }
 
                 entry.Processor.Process(entry.EntryAddress, _currentCommandBuffer.Words);

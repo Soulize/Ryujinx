@@ -196,8 +196,6 @@ namespace Ryujinx.Graphics.Gpu
         /// <param name="swapBuffersCallback">Callback method to call when a new texture should be presented on the screen</param>
         public void Present(Action swapBuffersCallback)
         {
-            _context.AdvanceSequence();
-
             if (_frameQueue.TryDequeue(out PresentationTexture pt))
             {
                 pt.AcquireCallback(_context, pt.UserObj);

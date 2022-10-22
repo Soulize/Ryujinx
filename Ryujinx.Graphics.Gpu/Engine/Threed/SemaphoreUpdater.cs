@@ -128,8 +128,6 @@ namespace Ryujinx.Graphics.Gpu.Engine.Threed
         private void ReleaseSemaphore()
         {
             _channel.MemoryManager.Write(_state.State.SemaphoreAddress.Pack(), _state.State.SemaphorePayload);
-
-            _context.AdvanceSequence();
         }
 
         /// <summary>
