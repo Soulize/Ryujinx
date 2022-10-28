@@ -39,8 +39,6 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (overlapIndex >= 0)
                 {
-                    if (list.Count > 2)
-
                     // Overlaps with a range. Search back to find the first one it doesn't overlap with.
 
                     while (overlapIndex > 0 && list[overlapIndex - 1].OverlapsWith(offset, size))
