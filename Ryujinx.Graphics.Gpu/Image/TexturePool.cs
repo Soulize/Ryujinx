@@ -211,26 +211,42 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 Texture texture = Items[id];
 
-                if (texture != null)
+                ref TextureDescriptor cachedDescriptor = ref DescriptorCache[id];
+                ref readonly TextureDescriptor descriptor = ref GetDescriptorRefAddress(address);
+
+                // If the descriptors are the same, the texture is the same,
+                // we don't need to remove as it was not modified. Just continue.
+                if (!descriptor.Equals(ref cachedDescriptor))
                 {
-                    ref TextureDescriptor cachedDescriptor = ref DescriptorCache[id];
-                    ref readonly TextureDescriptor descriptor = ref GetDescriptorRefAddress(address);
-
-                    // If the descriptors are the same, the texture is the same,
-                    // we don't need to remove as it was not modified. Just continue.
-                    if (descriptor.Equals(ref cachedDescriptor))
+                    if (texture != null)
                     {
-                        continue;
+                        if (texture.HasOneReference())
+                        {
+                            _channel.MemoryManager.Physical.TextureCache.AddShortCache(texture, ref cachedDescriptor);
+                        }
+
+                        texture.DecrementReferenceCount(this, id);
+
+                        Items[id] = null;
+                    }
+                    else
+                    {
+                        // Some textures are pre-processed to save time.
+
+                        if (descriptor.UnpackAddress() != 0 && descriptor.UnpackDepth() == 1 && descriptor.UnpackTextureTarget() == TextureTarget.Texture2D)
+                        {
+                            uint format = descriptor.UnpackFormat();
+                            bool srgb = descriptor.UnpackSrgb();
+
+                            if (FormatTable.TryGetTextureFormat(format, srgb, out FormatInfo formatInfo) && formatInfo.Format.IsAstc())
+                            {
+                                // Immediately cache the texture to prevent it from causing stutters later.
+                                GetInternal(id, out Texture _);
+                            }
+                        }
                     }
 
-                    if (texture.HasOneReference())
-                    {
-                        _channel.MemoryManager.Physical.TextureCache.AddShortCache(texture, ref cachedDescriptor);
-                    }
-
-                    texture.DecrementReferenceCount(this, id);
-
-                    Items[id] = null;
+                    cachedDescriptor = descriptor;
                 }
             }
         }
