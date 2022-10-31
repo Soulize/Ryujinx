@@ -236,20 +236,18 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                         Items[id] = null;
                     }
-                    else
+
+                    // Some textures are pre-processed to save time.
+
+                    if (descriptor.UnpackAddress() != 0)
                     {
-                        // Some textures are pre-processed to save time.
+                        uint format = descriptor.UnpackFormat();
+                        bool srgb = descriptor.UnpackSrgb();
 
-                        if (descriptor.UnpackAddress() != 0 && descriptor.UnpackDepth() == 1 && descriptor.UnpackTextureTarget() == TextureTarget.Texture2D)
+                        if (FormatTable.TryGetTextureFormat(format, srgb, out FormatInfo formatInfo) && formatInfo.Format.IsAstc())
                         {
-                            uint format = descriptor.UnpackFormat();
-                            bool srgb = descriptor.UnpackSrgb();
-
-                            if (FormatTable.TryGetTextureFormat(format, srgb, out FormatInfo formatInfo) && formatInfo.Format.IsAstc())
-                            {
-                                // Immediately cache the texture to prevent it from causing stutters later.
-                                GetInternal(id, out Texture _, true);
-                            }
+                            // Immediately cache the texture to prevent it from causing stutters later.
+                            GetInternal(id, out Texture _, true);
                         }
                     }
 
