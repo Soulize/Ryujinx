@@ -317,7 +317,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                     {
                         // Full texture invalidation.
 
-                        texture.SynchronizeFull();
+                        texture.SynchronizeFull(false);
                     }
                 }
             });

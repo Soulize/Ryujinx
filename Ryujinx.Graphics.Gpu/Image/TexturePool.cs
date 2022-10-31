@@ -44,7 +44,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="id">ID of the texture. This is effectively a zero-based index</param>
         /// <param name="texture">The texture with the given ID</param>
         /// <returns>The texture descriptor with the given ID</returns>
-        private ref readonly TextureDescriptor GetInternal(int id, out Texture texture)
+        private ref readonly TextureDescriptor GetInternal(int id, out Texture texture, bool preload = false)
         {
             texture = Items[id];
 
@@ -60,7 +60,14 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                     ProcessDereferenceQueue();
 
-                    texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize);
+                    TextureSearchFlags flags = TextureSearchFlags.ForSampler;
+
+                    if (preload)
+                    {
+                        flags |= TextureSearchFlags.Preload;
+                    }
+
+                    texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, flags, info, layerSize);
 
                     // If this happens, then the texture address is invalid, we can't add it to the cache.
                     if (texture == null)
@@ -93,7 +100,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                 }
 
                 // Memory is automatically synchronized on texture creation.
-                texture.SynchronizeMemory();
+                texture.SynchronizeMemory(preload);
             }
 
             return ref descriptor;
@@ -241,7 +248,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                             if (FormatTable.TryGetTextureFormat(format, srgb, out FormatInfo formatInfo) && formatInfo.Format.IsAstc())
                             {
                                 // Immediately cache the texture to prevent it from causing stutters later.
-                                GetInternal(id, out Texture _);
+                                GetInternal(id, out Texture _, true);
                             }
                         }
                     }

@@ -514,7 +514,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             {
                 ChangeSizeIfNeeded(info, texture, isSamplerTexture, sizeHint);
 
-                texture.SynchronizeMemory();
+                texture.SynchronizeMemory(flags.HasFlag(TextureSearchFlags.Preload));
 
                 return texture;
             }
@@ -776,7 +776,8 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 // We need to synchronize before copying the old view data to the texture,
                 // otherwise the copied data would be overwritten by a future synchronization.
-                texture.InitializeData(false, setData);
+                bool preload = setData && flags.HasFlag(TextureSearchFlags.Preload) && viewCompatible == 0;
+                texture.InitializeData(false, setData, preload);
 
                 texture.Group.InitializeOverlaps();
 
@@ -823,7 +824,10 @@ namespace Ryujinx.Graphics.Gpu.Image
                     }
                 }
 
-                texture.SynchronizeMemory();
+                if (!preload)
+                {
+                    texture.SynchronizeMemory();
+                }
             }
 
             // Sampler textures are managed by the texture pool, all other textures
