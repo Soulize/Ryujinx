@@ -10,6 +10,8 @@ namespace Ryujinx.Graphics.Vulkan
             public int Offset { get; }
             public int Size { get; }
 
+            public int End => Offset + Size;
+
             public Range(int offset, int size)
             {
                 Offset = offset;
@@ -49,29 +51,37 @@ namespace Ryujinx.Graphics.Vulkan
                     int endOffset = offset + size;
                     int startIndex = overlapIndex;
 
-                    var startOverlap = list[overlapIndex];
-                    if (startOverlap.Offset < offset)
+                    var currentOverlap = list[overlapIndex];
+
+                    // Orphan the start of the overlap.
+                    if (currentOverlap.Offset < offset)
                     {
-                        list[overlapIndex++] = new Range(startOverlap.Offset, offset - startOverlap.Offset);
+                        list[overlapIndex] = new Range(currentOverlap.Offset, offset - currentOverlap.Offset);
+                        currentOverlap = new Range(offset, currentOverlap.End - offset);
+                        list.Insert(++overlapIndex, currentOverlap);
                         startIndex++;
 
                         removedAny = true;
                     }
 
-                    while (overlapIndex < list.Count && list[overlapIndex].OverlapsWith(offset, size))
+                    // Remove any middle overlaps.
+                    while (currentOverlap.Offset < endOffset)
                     {
-                        var currentOverlap = list[overlapIndex];
-                        var currentOverlapEndOffset = currentOverlap.Offset + currentOverlap.Size;
-
-                        if (currentOverlapEndOffset > endOffset)
+                        if (currentOverlap.End > endOffset)
                         {
-                            list[overlapIndex] = new Range(endOffset, currentOverlapEndOffset - endOffset);
+                            // Update the end overlap instead of removing it, if it spans beyond the removed range.
+                            list[overlapIndex] = new Range(endOffset, currentOverlap.End - endOffset);
 
                             removedAny = true;
                             break;
                         }
 
-                        overlapIndex++;
+                        if (++overlapIndex >= list.Count)
+                        {
+                            break;
+                        }
+
+                        currentOverlap = list[overlapIndex];
                     }
 
                     int count = overlapIndex - startIndex;
@@ -117,13 +127,13 @@ namespace Ryujinx.Graphics.Vulkan
                         }
 
                         overlapIndex++;
+                        size = endOffset - offset;
                     }
 
                     int count = overlapIndex - startIndex;
 
                     list.RemoveRange(startIndex, count);
 
-                    size = endOffset - offset;
                     overlapIndex = startIndex;
                 }
                 else
@@ -132,16 +142,6 @@ namespace Ryujinx.Graphics.Vulkan
                 }
 
                 list.Insert(overlapIndex, new Range(offset, size));
-
-                int last = 0;
-                foreach (var rg in list)
-                {
-                    if (rg.Offset < last)
-                    {
-                        throw new System.Exception("list not properly sorted");
-                    }
-                    last = rg.Offset;
-                }
             }
             else
             {
