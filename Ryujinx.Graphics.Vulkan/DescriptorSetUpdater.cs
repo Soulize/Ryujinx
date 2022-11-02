@@ -103,7 +103,7 @@ namespace Ryujinx.Graphics.Vulkan
                 _dummyBuffer = gd.BufferManager.Create(gd, 0x10000, forConditionalRendering: false, deviceLocal: true);
             }
 
-            _uniformBufferOffsets = new int[Constants.MaxStorageBufferBindings];
+            _uniformBufferOffsets = new int[Constants.MaxUniformBufferBindings];
             _storageBufferOffsets = new int[Constants.MaxStorageBufferBindings];
 
             _storageBufferWrite = new bool[Constants.MaxStorageBufferBindings];

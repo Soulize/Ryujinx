@@ -41,7 +41,6 @@ namespace Ryujinx.Graphics.Vulkan
         private BufferRangeList _pendingDataRanges;
         private Dictionary<ulong, StagingBufferReserved> _mirrors;
 
-
         public BufferHolder(VulkanRenderer gd, Device device, VkBuffer buffer, MemoryAllocation allocation, int size)
         {
             _gd = gd;
@@ -135,6 +134,16 @@ namespace Ryujinx.Graphics.Vulkan
                 return true;
             }
 
+            // Is this mirror allowed to exist? Can't be used for write in any in-flight write.
+            if (_waitable.IsBufferRangeInUse(offset, size, true))
+            {
+                // Some of the data is not mirrorable, so upload the whole range.
+                ClearMirrors(cbs, offset, size);
+
+                buffer = null;
+                return false;
+            }
+
             // Build data for the new mirror.
 
             var baseData = new Span<byte>((void*)(_map + offset), size);
@@ -224,6 +233,7 @@ namespace Ryujinx.Graphics.Vulkan
             if (_pendingData != null)
             {
                 bool hadMirrors = _mirrors.Count > 0;
+
                 _mirrors.Clear();
 
                 if (_pendingDataRanges.Count() != 0)
