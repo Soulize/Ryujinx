@@ -21,7 +21,7 @@ namespace Ryujinx.Graphics.Vulkan
 
     class StagingBuffer : IDisposable
     {
-        private const int BufferSize = 16 * 1024 * 1024;
+        private const int BufferSize = 32 * 1024 * 1024;
 
         private int _freeOffset;
         private int _freeSize;
@@ -214,6 +214,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (GetContiguousFreeSize(alignment) < size)
                 {
+                    Console.WriteLine("no space :(");
                     return null;
                 }
             }
