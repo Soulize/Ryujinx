@@ -746,7 +746,7 @@ namespace Ryujinx.Graphics.Vulkan
                     {
                         // Need to do a slow upload.
                         BufferHolder srcHolder = _gd.BufferManager.Create(_gd, dataSize, baseType: BufferAllocationType.HostMapped);
-                        srcHolder.SetDataUnchecked(offset, data);
+                        srcHolder.SetDataUnchecked(0, data);
 
                         var srcBuffer = srcHolder.GetBuffer();
                         var dstBuffer = this.GetBuffer(cbs.Value.CommandBuffer, true);
