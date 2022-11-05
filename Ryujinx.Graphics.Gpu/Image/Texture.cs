@@ -12,6 +12,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
+using System.Reflection.Emit;
+using System.Threading.Tasks;
 
 namespace Ryujinx.Graphics.Gpu.Image
 {
@@ -26,6 +28,9 @@ namespace Ryujinx.Graphics.Gpu.Image
         private const int ByteComparisonSwitchThreshold = 4;
 
         private const int MinLevelsForForceAnisotropy = 5;
+
+        static TaskScheduler PreloadScheduler = new ConcurrentExclusiveSchedulerPair(
+            TaskScheduler.Default, (Environment.ProcessorCount * 3) / 4).ConcurrentScheduler;
 
         private struct TexturePoolOwner
         {
@@ -116,10 +121,12 @@ namespace Ryujinx.Graphics.Gpu.Image
         private int _updateCount;
         private byte[] _currentData;
 
+        private Task<byte[]> _preloadTask;
+
         private bool _modifiedStale = true;
 
         private ITexture _arrayViewTexture;
-        private Target   _arrayViewTarget;
+        private Target _arrayViewTarget;
 
         private ITexture _flushHostTexture;
 
@@ -138,6 +145,10 @@ namespace Ryujinx.Graphics.Gpu.Image
         public LinkedListNode<Texture> CacheNode { get; set; }
 
         /// <summary>
+        /// Entry for this texture in the short duration cache, if present.
+        /// </summary>
+        public ShortTextureCacheEntry ShortCacheEntry { get; set; }
+
         /// Physical memory ranges where the texture data is located.
         /// </summary>
         public MultiRange Range { get; private set; }
@@ -253,7 +264,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// </summary>
         /// <param name="isView">True if the texture is a view, false otherwise</param>
         /// <param name="withData">True if the texture is to be initialized with data</param>
-        public void InitializeData(bool isView, bool withData = false)
+        public void InitializeData(bool isView, bool withData = false, bool preload = false)
         {
             withData |= Group != null && Group.FlushIncompatibleOverlapsIfNeeded();
 
@@ -264,7 +275,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                 TextureCreateInfo createInfo = TextureCache.GetCreateInfo(Info, _context.Capabilities, ScaleFactor);
                 HostTexture = _context.Renderer.CreateTexture(createInfo, ScaleFactor);
 
-                SynchronizeMemory(); // Load the data.
+                SynchronizeMemory(preload); // Load the data.
                 if (ScaleMode == TextureScaleMode.Scaled)
                 {
                     SetScale(GraphicsConfig.ResScale); // Scale the data up.
@@ -413,7 +424,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             int blockWidth = Info.FormatInfo.BlockWidth;
             int blockHeight = Info.FormatInfo.BlockHeight;
 
-            width  <<= FirstLevel;
+            width <<= FirstLevel;
             height <<= FirstLevel;
 
             if (Target == Target.Texture3D)
@@ -429,7 +440,7 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             foreach (Texture view in _viewStorage._views)
             {
-                int viewWidth  = Math.Max(1, width  >> view.FirstLevel);
+                int viewWidth = Math.Max(1, width >> view.FirstLevel);
                 int viewHeight = Math.Max(1, height >> view.FirstLevel);
 
                 int viewDepthOrLayers;
@@ -641,7 +652,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Be aware that this can cause texture data written by the GPU to be lost, this is just a
         /// one way copy (from CPU owned to GPU owned memory).
         /// </summary>
-        public void SynchronizeMemory()
+        public void SynchronizeMemory(bool preload = false)
         {
             if (Target == Target.TextureBuffer)
             {
@@ -653,6 +664,27 @@ namespace Ryujinx.Graphics.Gpu.Image
                 return;
             }
 
+            if (_preloadTask != null)
+            {
+                if (preload)
+                {
+                    return;
+                }
+
+                if (!_preloadTask.IsCompleted)
+                {
+                    Logger.Warning?.PrintMsg(LogClass.Gpu, "Preload missed!");
+                }
+
+                var data = _preloadTask.Result;
+
+                HostTexture.SetData(data);
+
+                _hasData = true;
+
+                _preloadTask = null;
+            }
+
             _dirty = false;
 
             if (_hasData)
@@ -662,7 +694,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             else
             {
                 Group.CheckDirty(this, true);
-                SynchronizeFull();
+                SynchronizeFull(preload);
             }
         }
 
@@ -686,7 +718,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// Fully synchronizes guest and host memory.
         /// This will replace the entire texture with the data present in guest memory.
         /// </summary>
-        public void SynchronizeFull()
+        public void SynchronizeFull(bool preload)
         {
             if (_hasData)
             {
@@ -695,32 +727,43 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             ReadOnlySpan<byte> data = _physicalMemory.GetSpan(Range);
 
-            // If the host does not support ASTC compression, we need to do the decompression.
-            // The decompression is slow, so we want to avoid it as much as possible.
-            // This does a byte-by-byte check and skips the update if the data is equal in this case.
-            // This improves the speed on applications that overwrites ASTC data without changing anything.
-            if (Info.FormatInfo.Format.IsAstc() && !_context.Capabilities.SupportsAstcCompression)
+            if (preload)
             {
-                if (_updateCount < ByteComparisonSwitchThreshold)
+                var layoutConverted = ConvertToHostLayout(data).ToArray();
+
+                _preloadTask = Task.Factory.StartNew(() => ConvertIncompatibleFormat(layoutConverted).ToArray(), default, TaskCreationOptions.PreferFairness, PreloadScheduler);
+
+                _dirty = true;
+            }
+            else
+            {
+                // If the host does not support ASTC compression, we need to do the decompression.
+                // The decompression is slow, so we want to avoid it as much as possible.
+                // This does a byte-by-byte check and skips the update if the data is equal in this case.
+                // This improves the speed on applications that overwrites ASTC data without changing anything.
+                if (Info.FormatInfo.Format.IsAstc() && !_context.Capabilities.SupportsAstcCompression)
                 {
-                    _updateCount++;
-                }
-                else
-                {
-                    bool dataMatches = _currentData != null && data.SequenceEqual(_currentData);
-                    _currentData = data.ToArray();
-                    if (dataMatches)
+                    if (_updateCount < ByteComparisonSwitchThreshold)
                     {
-                        return;
+                        _updateCount++;
+                    }
+                    else
+                    {
+                        bool dataMatches = _currentData != null && data.SequenceEqual(_currentData);
+                        _currentData = data.ToArray();
+                        if (dataMatches)
+                        {
+                            return;
+                        }
                     }
                 }
+
+                SpanOrArray<byte> result = ConvertToHostCompatibleFormat(data);
+
+                HostTexture.SetData(result);
+
+                _hasData = true;
             }
-
-            SpanOrArray<byte> result = ConvertToHostCompatibleFormat(data);
-
-            HostTexture.SetData(result);
-
-            _hasData = true;
         }
 
         /// <summary>
@@ -775,14 +818,7 @@ namespace Ryujinx.Graphics.Gpu.Image
             _hasData = true;
         }
 
-        /// <summary>
-        /// Converts texture data to a format and layout that is supported by the host GPU.
-        /// </summary>
-        /// <param name="data">Data to be converted</param>
-        /// <param name="level">Mip level to convert</param>
-        /// <param name="single">True to convert a single slice</param>
-        /// <returns>Converted data</returns>
-        public SpanOrArray<byte> ConvertToHostCompatibleFormat(ReadOnlySpan<byte> data, int level = 0, bool single = false)
+        private SpanOrArray<byte> ConvertToHostLayout(ReadOnlySpan<byte> data, int level = 0, bool single = false)
         {
             int width = Info.Width;
             int height = Info.Height;
@@ -828,12 +864,28 @@ namespace Ryujinx.Graphics.Gpu.Image
                     data);
             }
 
+            return result;
+        }
+
+        private SpanOrArray<byte> ConvertIncompatibleFormat(SpanOrArray<byte> result, int level = 0, bool single = false)
+        {
+            int width = Info.Width;
+            int height = Info.Height;
+
+            int depth = _depth;
+            int layers = single ? 1 : _layers;
+            int levels = single ? 1 : (Info.Levels - level);
+
+            width = Math.Max(width >> level, 1);
+            height = Math.Max(height >> level, 1);
+            depth = Math.Max(depth >> level, 1);
+
             // Handle compressed cases not supported by the host:
             // - ASTC is usually not supported on desktop cards.
             // - BC4/BC5 is not supported on 3D textures.
             if (!_context.Capabilities.SupportsAstcCompression && Format.IsAstc())
             {
-                if (!AstcDecoder.TryDecodeToRgba8P(
+                if (!AstcDecoder.TryDecodeToRgba8(
                     result.ToArray(),
                     Info.FormatInfo.BlockWidth,
                     Info.FormatInfo.BlockHeight,
@@ -896,6 +948,20 @@ namespace Ryujinx.Graphics.Gpu.Image
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Converts texture data to a format and layout that is supported by the host GPU.
+        /// </summary>
+        /// <param name="data">Data to be converted</param>
+        /// <param name="level">Mip level to convert</param>
+        /// <param name="single">True to convert a single slice</param>
+        /// <returns>Converted data</returns>
+        public SpanOrArray<byte> ConvertToHostCompatibleFormat(ReadOnlySpan<byte> data, int level = 0, bool single = false)
+        {
+            SpanOrArray<byte> result = ConvertToHostLayout(data, level, single);
+
+            return ConvertIncompatibleFormat(result, level, single);
         }
 
         /// <summary>
@@ -1503,6 +1569,20 @@ namespace Ryujinx.Graphics.Gpu.Image
                 _poolOwners.Add(new TexturePoolOwner { Pool = pool, ID = id });
             }
             _referenceCount++;
+
+            if (ShortCacheEntry != null)
+            {
+                _physicalMemory.TextureCache.RemoveShortCache(this);
+            }
+        }
+
+        /// <summary>
+        /// Indicates that the texture has one reference left, and will delete on reference decrement.
+        /// </summary>
+        /// <returns>True if there is one reference remaining, false otherwise</returns>
+        public bool HasOneReference()
+        {
+            return _referenceCount == 1;
         }
 
         /// <summary>
@@ -1570,6 +1650,14 @@ namespace Ryujinx.Graphics.Gpu.Image
                 }
 
                 _poolOwners.Clear();
+            }
+
+            if (ShortCacheEntry != null && _context.IsGpuThread())
+            {
+                // If this is called from another thread (unmapped), the short cache will
+                // have to remove this texture on a future tick.
+
+                _physicalMemory.TextureCache.RemoveShortCache(this);
             }
 
             InvalidatedSequence++;

@@ -44,7 +44,7 @@ namespace Ryujinx.Graphics.Gpu.Image
         /// <param name="id">ID of the texture. This is effectively a zero-based index</param>
         /// <param name="texture">The texture with the given ID</param>
         /// <returns>The texture descriptor with the given ID</returns>
-        private ref readonly TextureDescriptor GetInternal(int id, out Texture texture)
+        private ref readonly TextureDescriptor GetInternal(int id, out Texture texture, bool preload = false)
         {
             texture = Items[id];
 
@@ -52,16 +52,28 @@ namespace Ryujinx.Graphics.Gpu.Image
 
             if (texture == null)
             {
-                TextureInfo info = GetInfo(descriptor, out int layerSize);
+                texture = PhysicalMemory.TextureCache.FindShortCache(descriptor);
 
-                ProcessDereferenceQueue();
-
-                texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, TextureSearchFlags.ForSampler, info, layerSize);
-
-                // If this happens, then the texture address is invalid, we can't add it to the cache.
                 if (texture == null)
                 {
-                    return ref descriptor;
+                    TextureInfo info = GetInfo(descriptor, out int layerSize);
+
+                    ProcessDereferenceQueue();
+
+                    TextureSearchFlags flags = TextureSearchFlags.ForSampler;
+
+                    if (preload)
+                    {
+                        flags |= TextureSearchFlags.Preload;
+                    }
+
+                    texture = PhysicalMemory.TextureCache.FindOrCreateTexture(_channel.MemoryManager, flags, info, layerSize);
+
+                    // If this happens, then the texture address is invalid, we can't add it to the cache.
+                    if (texture == null)
+                    {
+                        return ref descriptor;
+                    }
                 }
 
                 texture.IncrementReferenceCount(this, id);
@@ -88,7 +100,7 @@ namespace Ryujinx.Graphics.Gpu.Image
                 }
 
                 // Memory is automatically synchronized on texture creation.
-                texture.SynchronizeMemory();
+                texture.SynchronizeMemory(preload);
             }
 
             return ref descriptor;
@@ -206,20 +218,40 @@ namespace Ryujinx.Graphics.Gpu.Image
 
                 Texture texture = Items[id];
 
-                if (texture != null)
-                {
-                    TextureDescriptor descriptor = PhysicalMemory.Read<TextureDescriptor>(address);
+                ref TextureDescriptor cachedDescriptor = ref DescriptorCache[id];
+                ref readonly TextureDescriptor descriptor = ref GetDescriptorRefAddress(address);
 
-                    // If the descriptors are the same, the texture is the same,
-                    // we don't need to remove as it was not modified. Just continue.
-                    if (descriptor.Equals(ref DescriptorCache[id]))
+                // If the descriptors are the same, the texture is the same,
+                // we don't need to remove as it was not modified. Just continue.
+                if (!descriptor.Equals(ref cachedDescriptor))
+                {
+                    if (texture != null)
                     {
-                        continue;
+                        if (texture.HasOneReference())
+                        {
+                            _channel.MemoryManager.Physical.TextureCache.AddShortCache(texture, ref cachedDescriptor);
+                        }
+
+                        texture.DecrementReferenceCount(this, id);
+
+                        Items[id] = null;
                     }
 
-                    texture.DecrementReferenceCount(this, id);
+                    // Some textures are pre-processed to save time.
 
-                    Items[id] = null;
+                    if (descriptor.UnpackAddress() != 0)
+                    {
+                        uint format = descriptor.UnpackFormat();
+                        bool srgb = descriptor.UnpackSrgb();
+
+                        if (FormatTable.TryGetTextureFormat(format, srgb, out FormatInfo formatInfo) && formatInfo.Format.IsAstc())
+                        {
+                            // Immediately cache the texture to prevent it from causing stutters later.
+                            GetInternal(id, out Texture _, true);
+                        }
+                    }
+
+                    cachedDescriptor = descriptor;
                 }
             }
         }
