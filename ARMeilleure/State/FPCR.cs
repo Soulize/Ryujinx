@@ -3,21 +3,20 @@ using System;
 namespace ARMeilleure.State
 {
     [Flags]
-    public enum FPCR
+    public enum FPCR : uint
     {
-        Ufe = 1 << 11,
-        Fz  = 1 << 24,
-        Dn  = 1 << 25,
-        Ahp = 1 << 26
-    }
+        Ioe = 1u << 8,
+        Dze = 1u << 9,
+        Ofe = 1u << 10,
+        Ufe = 1u << 11,
+        Ixe = 1u << 12,
+        Ide = 1u << 15,
+        RMode0 = 1u << 22,
+        RMode1 = 1u << 23,
+        Fz  = 1u << 24,
+        Dn  = 1u << 25,
+        Ahp = 1u << 26,
 
-    public static class FPCRExtensions
-    {
-        private const int RModeShift = 22;
-
-        public static FPRoundingMode GetRoundingMode(this FPCR fpcr)
-        {
-            return (FPRoundingMode)(((int)fpcr >> RModeShift) & 3);
-        }
+        Mask = Ahp | Dn | Fz | RMode1 | RMode0 | Ide | Ixe | Ufe | Ofe | Dze | Ioe // 0x07C09F00u
     }
 }

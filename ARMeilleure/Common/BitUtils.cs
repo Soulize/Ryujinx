@@ -1,39 +1,14 @@
+using System.Numerics;
+
 namespace ARMeilleure.Common
 {
     static class BitUtils
     {
-        private const int DeBrujinSequence = 0x77cb531;
-
-        private static readonly int[] DeBrujinLbsLut;
-
         private static readonly sbyte[] HbsNibbleLut;
 
         static BitUtils()
         {
-            DeBrujinLbsLut = new int[32];
-
-            for (int index = 0; index < DeBrujinLbsLut.Length; index++)
-            {
-                uint lutIndex = (uint)(DeBrujinSequence * (1 << index)) >> 27;
-
-                DeBrujinLbsLut[lutIndex] = index;
-            }
-
             HbsNibbleLut = new sbyte[] { -1, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3 };
-        }
-
-        public static int CountBits(int value)
-        {
-            int count = 0;
-
-            while (value != 0)
-            {
-                value &= ~(value & -value);
-
-                count++;
-            }
-
-            return count;
         }
 
         public static long FillWithOnes(int bits)
@@ -43,37 +18,12 @@ namespace ARMeilleure.Common
 
         public static int HighestBitSet(int value)
         {
-            if (value == 0)
-            {
-                return -1;
-            }
-
-            for (int bit = 31; bit >= 0; bit--)
-            {
-                if (((value >> bit) & 1) != 0)
-                {
-                    return bit;
-                }
-            }
-
-            return -1;
+            return 31 - BitOperations.LeadingZeroCount((uint)value);
         }
 
         public static int HighestBitSetNibble(int value)
         {
             return HbsNibbleLut[value];
-        }
-
-        public static int LowestBitSet(int value)
-        {
-            if (value == 0)
-            {
-                return -1;
-            }
-
-            int lsb = value & -value;
-
-            return DeBrujinLbsLut[(uint)(DeBrujinSequence * lsb) >> 27];
         }
 
         public static long Replicate(long bits, int size)

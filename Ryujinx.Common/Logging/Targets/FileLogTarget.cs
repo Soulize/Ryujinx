@@ -1,13 +1,11 @@
 ﻿using System;
 using System.IO;
-using System.Text;
+using System.Linq;
 
 namespace Ryujinx.Common.Logging
 {
     public class FileLogTarget : ILogTarget
     {
-        private static readonly ObjectPool<StringBuilder> _stringBuilderPool = SharedPools.Default<StringBuilder>();
-
         private readonly StreamWriter  _logWriter;
         private readonly ILogFormatter _formatter;
         private readonly string        _name;
@@ -20,6 +18,22 @@ namespace Ryujinx.Common.Logging
 
         public FileLogTarget(string path, string name, FileShare fileShare, FileMode fileMode)
         {
+            // Ensure directory is present
+            DirectoryInfo logDir = new DirectoryInfo(Path.Combine(path, "Logs"));
+            logDir.Create();
+
+            // Clean up old logs, should only keep 3
+            FileInfo[] files = logDir.GetFiles("*.log").OrderBy((info => info.CreationTime)).ToArray();
+            for (int i = 0; i < files.Length - 2; i++)
+            {
+                files[i].Delete();
+            }
+
+            string version = ReleaseInformations.GetVersion();
+
+            // Get path for the current time
+            path = Path.Combine(logDir.FullName, $"Ryujinx_{version}_{DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss")}.log");
+
             _name      = name;
             _logWriter = new StreamWriter(File.Open(path, fileMode, FileAccess.Write, fileShare));
             _formatter = new DefaultLogFormatter();

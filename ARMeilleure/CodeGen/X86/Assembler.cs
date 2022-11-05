@@ -1,270 +1,86 @@
+using ARMeilleure.CodeGen.Linking;
 using ARMeilleure.IntermediateRepresentation;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace ARMeilleure.CodeGen.X86
 {
-    class Assembler
+    partial class Assembler
     {
-        private const int BadOp       = 0;
+        private const int ReservedBytesForJump = 1;
+
         private const int OpModRMBits = 24;
 
         private const byte RexPrefix  = 0x40;
         private const byte RexWPrefix = 0x48;
         private const byte LockPrefix = 0xf0;
 
-        [Flags]
-        private enum InstructionFlags
+        private const int MaxRegNumber = 15;
+
+        private struct Jump
         {
-            None     = 0,
-            RegOnly  = 1 << 0,
-            Reg8Src  = 1 << 1,
-            Reg8Dest = 1 << 2,
-            RexW     = 1 << 3,
-            Vex      = 1 << 4,
+            public bool IsConditional { get; }
+            public X86Condition Condition { get; }
+            public Operand JumpLabel { get; }
+            public long? JumpTarget { get; set; }
+            public long JumpPosition { get; }
+            public long Offset { get; set; }
+            public int InstSize { get; set; }
 
-            PrefixBit  = 16,
-            PrefixMask = 3 << PrefixBit,
-            Prefix66   = 1 << PrefixBit,
-            PrefixF3   = 2 << PrefixBit,
-            PrefixF2   = 3 << PrefixBit
-        }
-
-        private struct InstructionInfo
-        {
-            public int OpRMR     { get; }
-            public int OpRMImm8  { get; }
-            public int OpRMImm32 { get; }
-            public int OpRImm64  { get; }
-            public int OpRRM     { get; }
-
-            public InstructionFlags Flags { get; }
-
-            public InstructionInfo(
-                int              opRMR,
-                int              opRMImm8,
-                int              opRMImm32,
-                int              opRImm64,
-                int              opRRM,
-                InstructionFlags flags)
+            public Jump(Operand jumpLabel, long jumpPosition)
             {
-                OpRMR     = opRMR;
-                OpRMImm8  = opRMImm8;
-                OpRMImm32 = opRMImm32;
-                OpRImm64  = opRImm64;
-                OpRRM     = opRRM;
-                Flags     = flags;
+                IsConditional = false;
+                Condition = 0;
+                JumpLabel = jumpLabel;
+                JumpTarget = null;
+                JumpPosition = jumpPosition;
+
+                Offset = 0;
+                InstSize = 0;
+            }
+
+            public Jump(X86Condition condition, Operand jumpLabel, long jumpPosition)
+            {
+                IsConditional = true;
+                Condition = condition;
+                JumpLabel = jumpLabel;
+                JumpTarget = null;
+                JumpPosition = jumpPosition;
+
+                Offset = 0;
+                InstSize = 0;
             }
         }
 
-        private static InstructionInfo[] _instTable;
-
-        private Stream _stream;
-
-        static Assembler()
+        private struct Reloc
         {
-            _instTable = new InstructionInfo[(int)X86Instruction.Count];
-
-            //  Name                                           RM/R        RM/I8       RM/I32      R/I64       R/RM        Flags
-            Add(X86Instruction.Add,        new InstructionInfo(0x00000001, 0x00000083, 0x00000081, BadOp,      0x00000003, InstructionFlags.None));
-            Add(X86Instruction.Addpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f58, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Addps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f58, InstructionFlags.Vex));
-            Add(X86Instruction.Addsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f58, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Addss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f58, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.And,        new InstructionInfo(0x00000021, 0x04000083, 0x04000081, BadOp,      0x00000023, InstructionFlags.None));
-            Add(X86Instruction.Andnpd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f55, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Andnps,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f55, InstructionFlags.Vex));
-            Add(X86Instruction.Andpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f54, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Andps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f54, InstructionFlags.Vex));
-            Add(X86Instruction.Blendvpd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3815, InstructionFlags.Prefix66));
-            Add(X86Instruction.Blendvps,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3814, InstructionFlags.Prefix66));
-            Add(X86Instruction.Bsr,        new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fbd, InstructionFlags.None));
-            Add(X86Instruction.Bswap,      new InstructionInfo(0x00000fc8, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.RegOnly));
-            Add(X86Instruction.Call,       new InstructionInfo(0x020000ff, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Cmovcc,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f40, InstructionFlags.None));
-            Add(X86Instruction.Cmp,        new InstructionInfo(0x00000039, 0x07000083, 0x07000081, BadOp,      0x0000003b, InstructionFlags.None));
-            Add(X86Instruction.Cmppd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc2, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Cmpps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc2, InstructionFlags.Vex));
-            Add(X86Instruction.Cmpsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc2, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Cmpss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc2, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Cmpxchg16b, new InstructionInfo(0x01000fc7, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.RexW));
-            Add(X86Instruction.Comisd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f2f, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Comiss,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f2f, InstructionFlags.Vex));
-            Add(X86Instruction.Cpuid,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fa2, InstructionFlags.RegOnly));
-            Add(X86Instruction.Cvtdq2pd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fe6, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Cvtdq2ps,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5b, InstructionFlags.Vex));
-            Add(X86Instruction.Cvtpd2dq,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fe6, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Cvtpd2ps,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5a, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Cvtps2dq,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5b, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Cvtps2pd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5a, InstructionFlags.Vex));
-            Add(X86Instruction.Cvtsd2si,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f2d, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Cvtsd2ss,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5a, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Cvtsi2sd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f2a, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Cvtsi2ss,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f2a, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Cvtss2sd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5a, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Div,        new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x060000f7, InstructionFlags.None));
-            Add(X86Instruction.Divpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5e, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Divps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5e, InstructionFlags.Vex));
-            Add(X86Instruction.Divsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5e, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Divss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5e, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Haddpd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f7c, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Haddps,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f7c, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Idiv,       new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x070000f7, InstructionFlags.None));
-            Add(X86Instruction.Imul,       new InstructionInfo(BadOp,      0x0000006b, 0x00000069, BadOp,      0x00000faf, InstructionFlags.None));
-            Add(X86Instruction.Imul128,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x050000f7, InstructionFlags.None));
-            Add(X86Instruction.Insertps,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a21, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Lea,        new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x0000008d, InstructionFlags.None));
-            Add(X86Instruction.Maxpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5f, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Maxps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5f, InstructionFlags.Vex));
-            Add(X86Instruction.Maxsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5f, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Maxss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5f, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Minpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5d, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Minps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5d, InstructionFlags.Vex));
-            Add(X86Instruction.Minsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5d, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Minss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5d, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Mov,        new InstructionInfo(0x00000089, BadOp,      0x000000c7, 0x000000b8, 0x0000008b, InstructionFlags.None));
-            Add(X86Instruction.Mov16,      new InstructionInfo(0x00000089, BadOp,      0x000000c7, BadOp,      0x0000008b, InstructionFlags.Prefix66));
-            Add(X86Instruction.Mov8,       new InstructionInfo(0x00000088, 0x000000c6, BadOp,      BadOp,      0x0000008a, InstructionFlags.Reg8Src | InstructionFlags.Reg8Dest));
-            Add(X86Instruction.Movd,       new InstructionInfo(0x00000f7e, BadOp,      BadOp,      BadOp,      0x00000f6e, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Movdqu,     new InstructionInfo(0x00000f7f, BadOp,      BadOp,      BadOp,      0x00000f6f, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Movhlps,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f12, InstructionFlags.Vex));
-            Add(X86Instruction.Movlhps,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f16, InstructionFlags.Vex));
-            Add(X86Instruction.Movq,       new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f7e, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Movsd,      new InstructionInfo(0x00000f11, BadOp,      BadOp,      BadOp,      0x00000f10, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Movss,      new InstructionInfo(0x00000f11, BadOp,      BadOp,      BadOp,      0x00000f10, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Movsx16,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fbf, InstructionFlags.None));
-            Add(X86Instruction.Movsx32,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000063, InstructionFlags.None));
-            Add(X86Instruction.Movsx8,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fbe, InstructionFlags.Reg8Src));
-            Add(X86Instruction.Movzx16,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fb7, InstructionFlags.None));
-            Add(X86Instruction.Movzx8,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fb6, InstructionFlags.Reg8Src));
-            Add(X86Instruction.Mul128,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x040000f7, InstructionFlags.None));
-            Add(X86Instruction.Mulpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f59, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Mulps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f59, InstructionFlags.Vex));
-            Add(X86Instruction.Mulsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f59, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Mulss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f59, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Neg,        new InstructionInfo(0x030000f7, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Not,        new InstructionInfo(0x020000f7, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Or,         new InstructionInfo(0x00000009, 0x01000083, 0x01000081, BadOp,      0x0000000b, InstructionFlags.None));
-            Add(X86Instruction.Paddb,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ffc, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Paddd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ffe, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Paddq,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fd4, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Paddw,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ffd, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pand,       new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fdb, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pandn,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fdf, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pavgb,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fe0, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pavgw,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fe3, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pblendvb,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3810, InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpeqb,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f74, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpeqd,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f76, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpeqq,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3829, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpeqw,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f75, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpgtb,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f64, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpgtd,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f66, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpgtq,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3837, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pcmpgtw,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f65, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pextrb,     new InstructionInfo(0x000f3a14, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pextrd,     new InstructionInfo(0x000f3a16, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pextrq,     new InstructionInfo(0x000f3a16, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.Vex | InstructionFlags.RexW | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pextrw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc5, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pinsrb,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a20, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pinsrd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a22, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pinsrq,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a22, InstructionFlags.Vex | InstructionFlags.RexW | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pinsrw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc4, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmaxsb,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f383c, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmaxsd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f383d, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmaxsw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fee, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmaxub,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fde, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmaxud,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f383f, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmaxuw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f383e, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pminsb,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3838, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pminsd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3839, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pminsw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fea, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pminub,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fda, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pminud,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f383b, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pminuw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f383a, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmovsxbw,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3820, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmovsxdq,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3825, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmovsxwd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3823, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmovzxbw,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3830, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmovzxdq,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3835, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmovzxwd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3833, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmulld,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3840, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pmullw,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fd5, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pop,        new InstructionInfo(0x0000008f, BadOp,      BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Popcnt,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fb8, InstructionFlags.PrefixF3));
-            Add(X86Instruction.Por,        new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000feb, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pshufb,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3800, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pshufd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f70, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pslld,      new InstructionInfo(BadOp,      0x06000f72, BadOp,      BadOp,      0x00000ff2, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Pslldq,     new InstructionInfo(BadOp,      0x07000f73, BadOp,      BadOp,      BadOp,      InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psllq,      new InstructionInfo(BadOp,      0x06000f73, BadOp,      BadOp,      0x00000ff3, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psllw,      new InstructionInfo(BadOp,      0x06000f71, BadOp,      BadOp,      0x00000ff1, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psrad,      new InstructionInfo(BadOp,      0x04000f72, BadOp,      BadOp,      0x00000fe2, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psraw,      new InstructionInfo(BadOp,      0x04000f71, BadOp,      BadOp,      0x00000fe1, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psrld,      new InstructionInfo(BadOp,      0x02000f72, BadOp,      BadOp,      0x00000fd2, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psrlq,      new InstructionInfo(BadOp,      0x02000f73, BadOp,      BadOp,      0x00000fd3, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psrldq,     new InstructionInfo(BadOp,      0x03000f73, BadOp,      BadOp,      BadOp,      InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psrlw,      new InstructionInfo(BadOp,      0x02000f71, BadOp,      BadOp,      0x00000fd1, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psubb,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ff8, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psubd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ffa, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psubq,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ffb, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Psubw,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000ff9, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpckhbw,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f68, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpckhdq,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f6a, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpckhqdq, new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f6d, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpckhwd,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f69, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpcklbw,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f60, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpckldq,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f62, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpcklqdq, new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f6c, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Punpcklwd,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f61, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Push,       new InstructionInfo(BadOp,      0x0000006a, 0x00000068, BadOp,      0x060000ff, InstructionFlags.None));
-            Add(X86Instruction.Pxor,       new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fef, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Rcpps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f53, InstructionFlags.Vex));
-            Add(X86Instruction.Rcpss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f53, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Ror,        new InstructionInfo(0x010000d3, 0x010000c1, BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Roundpd,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a09, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Roundps,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a08, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Roundsd,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a0b, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Roundss,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a0a, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Rsqrtps,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f52, InstructionFlags.Vex));
-            Add(X86Instruction.Rsqrtss,    new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f52, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Sar,        new InstructionInfo(0x070000d3, 0x070000c1, BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Setcc,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f90, InstructionFlags.Reg8Dest));
-            Add(X86Instruction.Shl,        new InstructionInfo(0x040000d3, 0x040000c1, BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Shr,        new InstructionInfo(0x050000d3, 0x050000c1, BadOp,      BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Shufpd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc6, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Shufps,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000fc6, InstructionFlags.Vex));
-            Add(X86Instruction.Sqrtpd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f51, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Sqrtps,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f51, InstructionFlags.Vex));
-            Add(X86Instruction.Sqrtsd,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f51, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Sqrtss,     new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f51, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Sub,        new InstructionInfo(0x00000029, 0x05000083, 0x05000081, BadOp,      0x0000002b, InstructionFlags.None));
-            Add(X86Instruction.Subpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5c, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Subps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5c, InstructionFlags.Vex));
-            Add(X86Instruction.Subsd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5c, InstructionFlags.Vex | InstructionFlags.PrefixF2));
-            Add(X86Instruction.Subss,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f5c, InstructionFlags.Vex | InstructionFlags.PrefixF3));
-            Add(X86Instruction.Test,       new InstructionInfo(0x00000085, BadOp,      0x000000f7, BadOp,      BadOp,      InstructionFlags.None));
-            Add(X86Instruction.Unpckhpd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f15, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Unpckhps,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f15, InstructionFlags.Vex));
-            Add(X86Instruction.Unpcklpd,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f14, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Unpcklps,   new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f14, InstructionFlags.Vex));
-            Add(X86Instruction.Vblendvpd,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a4b, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Vblendvps,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a4a, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Vpblendvb,  new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x000f3a4c, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Xor,        new InstructionInfo(0x00000031, 0x06000083, 0x06000081, BadOp,      0x00000033, InstructionFlags.None));
-            Add(X86Instruction.Xorpd,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f57, InstructionFlags.Vex | InstructionFlags.Prefix66));
-            Add(X86Instruction.Xorps,      new InstructionInfo(BadOp,      BadOp,      BadOp,      BadOp,      0x00000f57, InstructionFlags.Vex));
+            public int JumpIndex { get; set; }
+            public int Position { get; set; }
+            public Symbol Symbol { get; set; }
         }
 
-        private static void Add(X86Instruction inst, InstructionInfo info)
-        {
-            _instTable[(int)inst] = info;
-        }
+        private readonly List<Jump> _jumps;
+        private readonly List<Reloc> _relocs;
+        private readonly Dictionary<Operand, long> _labels;
+        private readonly Stream _stream;
 
-        public Assembler(Stream stream)
+        public bool HasRelocs => _relocs != null;
+
+        public Assembler(Stream stream, bool relocatable)
         {
             _stream = stream;
+            _labels = new Dictionary<Operand, long>();
+            _jumps = new List<Jump>();
+
+            _relocs = relocatable ? new List<Reloc>() : null;
+        }
+
+        public void MarkLabel(Operand label)
+        {
+            _labels.Add(label, _stream.Position);
         }
 
         public void Add(Operand dest, Operand source, OperandType type)
@@ -294,12 +110,12 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Bswap(Operand dest)
         {
-            WriteInstruction(dest, null, dest.Type, X86Instruction.Bswap);
+            WriteInstruction(dest, default, dest.Type, X86Instruction.Bswap);
         }
 
         public void Call(Operand dest)
         {
-            WriteInstruction(dest, null, OperandType.None, X86Instruction.Call);
+            WriteInstruction(dest, default, OperandType.None, X86Instruction.Call);
         }
 
         public void Cdq()
@@ -309,9 +125,9 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Cmovcc(Operand dest, Operand source, OperandType type, X86Condition condition)
         {
-            InstructionInfo info = _instTable[(int)X86Instruction.Cmovcc];
+            ref readonly InstructionInfo info = ref _instTable[(int)X86Instruction.Cmovcc];
 
-            WriteOpCode(dest, null, source, type, info.Flags, info.OpRRM | (int)condition, rrm: true);
+            WriteOpCode(dest, default, source, type, info.Flags, info.OpRRM | (int)condition, rrm: true);
         }
 
         public void Cmp(Operand src1, Operand src2, OperandType type)
@@ -325,26 +141,51 @@ namespace ARMeilleure.CodeGen.X86
             WriteByte(0x99);
         }
 
-        public void Cmpxchg16b(MemoryOperand memOp)
+        public void Cmpxchg(Operand memOp, Operand src)
         {
+            Debug.Assert(memOp.Kind == OperandKind.Memory);
+
             WriteByte(LockPrefix);
 
-            WriteInstruction(memOp, null, OperandType.None, X86Instruction.Cmpxchg16b);
+            WriteInstruction(memOp, src, src.Type, X86Instruction.Cmpxchg);
+        }
+
+        public void Cmpxchg16(Operand memOp, Operand src)
+        {
+            Debug.Assert(memOp.Kind == OperandKind.Memory);
+
+            WriteByte(LockPrefix);
+            WriteByte(0x66);
+
+            WriteInstruction(memOp, src, src.Type, X86Instruction.Cmpxchg);
+        }
+
+        public void Cmpxchg16b(Operand memOp)
+        {
+            Debug.Assert(memOp.Kind == OperandKind.Memory);
+
+            WriteByte(LockPrefix);
+
+            WriteInstruction(memOp, default, OperandType.None, X86Instruction.Cmpxchg16b);
+        }
+
+        public void Cmpxchg8(Operand memOp, Operand src)
+        {
+            Debug.Assert(memOp.Kind == OperandKind.Memory);
+
+            WriteByte(LockPrefix);
+
+            WriteInstruction(memOp, src, src.Type, X86Instruction.Cmpxchg8);
         }
 
         public void Comisd(Operand src1, Operand src2)
         {
-            WriteInstruction(src1, null, src2, X86Instruction.Comisd);
+            WriteInstruction(src1, default, src2, X86Instruction.Comisd);
         }
 
         public void Comiss(Operand src1, Operand src2)
         {
-            WriteInstruction(src1, null, src2, X86Instruction.Comiss);
-        }
-
-        public void Cpuid()
-        {
-            WriteInstruction(null, null, OperandType.None, X86Instruction.Cpuid);
+            WriteInstruction(src1, default, src2, X86Instruction.Comiss);
         }
 
         public void Cvtsd2ss(Operand dest, Operand src1, Operand src2)
@@ -369,7 +210,7 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Div(Operand source)
         {
-            WriteInstruction(null, source, source.Type, X86Instruction.Div);
+            WriteInstruction(default, source, source.Type, X86Instruction.Div);
         }
 
         public void Divsd(Operand dest, Operand src1, Operand src2)
@@ -384,12 +225,12 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Idiv(Operand source)
         {
-            WriteInstruction(null, source, source.Type, X86Instruction.Idiv);
+            WriteInstruction(default, source, source.Type, X86Instruction.Idiv);
         }
 
         public void Imul(Operand source)
         {
-            WriteInstruction(null, source, source.Type, X86Instruction.Imul128);
+            WriteInstruction(default, source, source.Type, X86Instruction.Imul128);
         }
 
         public void Imul(Operand dest, Operand source, OperandType type)
@@ -404,7 +245,7 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Imul(Operand dest, Operand src1, Operand src2, OperandType type)
         {
-            InstructionInfo info = _instTable[(int)X86Instruction.Imul];
+            ref readonly InstructionInfo info = ref _instTable[(int)X86Instruction.Imul];
 
             if (src2.Kind != OperandKind.Constant)
             {
@@ -413,13 +254,13 @@ namespace ARMeilleure.CodeGen.X86
 
             if (IsImm8(src2.Value, src2.Type) && info.OpRMImm8 != BadOp)
             {
-                WriteOpCode(dest, null, src1, type, info.Flags, info.OpRMImm8, rrm: true);
+                WriteOpCode(dest, default, src1, type, info.Flags, info.OpRMImm8, rrm: true);
 
                 WriteByte(src2.AsByte());
             }
             else if (IsImm32(src2.Value, src2.Type) && info.OpRMImm32 != BadOp)
             {
-                WriteOpCode(dest, null, src1, type, info.Flags, info.OpRMImm32, rrm: true);
+                WriteOpCode(dest, default, src1, type, info.Flags, info.OpRMImm32, rrm: true);
 
                 WriteInt32(src2.AsInt32());
             }
@@ -434,6 +275,21 @@ namespace ARMeilleure.CodeGen.X86
             WriteInstruction(dest, src1, src2, X86Instruction.Insertps);
 
             WriteByte(imm);
+        }
+
+        public void Jcc(X86Condition condition, Operand dest)
+        {
+            if (dest.Kind == OperandKind.Label)
+            {
+                _jumps.Add(new Jump(condition, dest, _stream.Position));
+
+                // ReservedBytesForJump
+                WriteByte(0);
+            }
+            else
+            {
+                throw new ArgumentException("Destination operand must be of kind Label", nameof(dest));
+            }
         }
 
         public void Jcc(X86Condition condition, long offset)
@@ -477,9 +333,35 @@ namespace ARMeilleure.CodeGen.X86
             }
         }
 
+        public void Jmp(Operand dest)
+        {
+            if (dest.Kind == OperandKind.Label)
+            {
+                _jumps.Add(new Jump(dest, _stream.Position));
+
+                // ReservedBytesForJump
+                WriteByte(0);
+            }
+            else
+            {
+                WriteInstruction(dest, default, OperandType.None, X86Instruction.Jmp);
+            }
+        }
+
+        public void Ldmxcsr(Operand dest)
+        {
+            WriteInstruction(dest, default, OperandType.I32, X86Instruction.Ldmxcsr);
+        }
+
         public void Lea(Operand dest, Operand source, OperandType type)
         {
             WriteInstruction(dest, source, type, X86Instruction.Lea);
+        }
+
+        public void LockOr(Operand dest, Operand source, OperandType type)
+        {
+            WriteByte(LockPrefix);
+            WriteInstruction(dest, source, type, X86Instruction.Or);
         }
 
         public void Mov(Operand dest, Operand source, OperandType type)
@@ -499,21 +381,21 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Movd(Operand dest, Operand source)
         {
-            InstructionInfo info = _instTable[(int)X86Instruction.Movd];
+            ref readonly InstructionInfo info = ref _instTable[(int)X86Instruction.Movd];
 
             if (source.Type.IsInteger() || source.Kind == OperandKind.Memory)
             {
-                WriteOpCode(dest, null, source, OperandType.None, info.Flags, info.OpRRM, rrm: true);
+                WriteOpCode(dest, default, source, OperandType.None, info.Flags, info.OpRRM, rrm: true);
             }
             else
             {
-                WriteOpCode(dest, null, source, OperandType.None, info.Flags, info.OpRMR);
+                WriteOpCode(dest, default, source, OperandType.None, info.Flags, info.OpRMR);
             }
         }
 
         public void Movdqu(Operand dest, Operand source)
         {
-            WriteInstruction(dest, null, source, X86Instruction.Movdqu);
+            WriteInstruction(dest, default, source, X86Instruction.Movdqu);
         }
 
         public void Movhlps(Operand dest, Operand src1, Operand src2)
@@ -528,17 +410,17 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Movq(Operand dest, Operand source)
         {
-            InstructionInfo info = _instTable[(int)X86Instruction.Movd];
+            ref readonly InstructionInfo info = ref _instTable[(int)X86Instruction.Movd];
 
             InstructionFlags flags = info.Flags | InstructionFlags.RexW;
 
             if (source.Type.IsInteger() || source.Kind == OperandKind.Memory)
             {
-                WriteOpCode(dest, null, source, OperandType.None, flags, info.OpRRM, rrm: true);
+                WriteOpCode(dest, default, source, OperandType.None, flags, info.OpRRM, rrm: true);
             }
             else if (dest.Type.IsInteger() || dest.Kind == OperandKind.Memory)
             {
-                WriteOpCode(dest, null, source, OperandType.None, flags, info.OpRMR);
+                WriteOpCode(dest, default, source, OperandType.None, flags, info.OpRMR);
             }
             else
             {
@@ -583,7 +465,7 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Mul(Operand source)
         {
-            WriteInstruction(null, source, source.Type, X86Instruction.Mul128);
+            WriteInstruction(default, source, source.Type, X86Instruction.Mul128);
         }
 
         public void Mulsd(Operand dest, Operand src1, Operand src2)
@@ -598,17 +480,24 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Neg(Operand dest)
         {
-            WriteInstruction(dest, null, dest.Type, X86Instruction.Neg);
+            WriteInstruction(dest, default, dest.Type, X86Instruction.Neg);
         }
 
         public void Not(Operand dest)
         {
-            WriteInstruction(dest, null, dest.Type, X86Instruction.Not);
+            WriteInstruction(dest, default, dest.Type, X86Instruction.Not);
         }
 
         public void Or(Operand dest, Operand source, OperandType type)
         {
             WriteInstruction(dest, source, type, X86Instruction.Or);
+        }
+
+        public void Pclmulqdq(Operand dest, Operand source, byte imm)
+        {
+            WriteInstruction(dest, default, source, X86Instruction.Pclmulqdq);
+
+            WriteByte(imm);
         }
 
         public void Pcmpeqw(Operand dest, Operand src1, Operand src2)
@@ -618,28 +507,28 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Pextrb(Operand dest, Operand source, byte imm)
         {
-            WriteInstruction(dest, null, source, X86Instruction.Pextrb);
+            WriteInstruction(dest, default, source, X86Instruction.Pextrb);
 
             WriteByte(imm);
         }
 
         public void Pextrd(Operand dest, Operand source, byte imm)
         {
-            WriteInstruction(dest, null, source, X86Instruction.Pextrd);
+            WriteInstruction(dest, default, source, X86Instruction.Pextrd);
 
             WriteByte(imm);
         }
 
         public void Pextrq(Operand dest, Operand source, byte imm)
         {
-            WriteInstruction(dest, null, source, X86Instruction.Pextrq);
+            WriteInstruction(dest, default, source, X86Instruction.Pextrq);
 
             WriteByte(imm);
         }
 
         public void Pextrw(Operand dest, Operand source, byte imm)
         {
-            WriteInstruction(dest, null, source, X86Instruction.Pextrw);
+            WriteInstruction(dest, default, source, X86Instruction.Pextrw);
 
             WriteByte(imm);
         }
@@ -680,7 +569,7 @@ namespace ARMeilleure.CodeGen.X86
             }
             else
             {
-                WriteInstruction(dest, null, dest.Type, X86Instruction.Pop);
+                WriteInstruction(dest, default, dest.Type, X86Instruction.Pop);
             }
         }
 
@@ -691,7 +580,7 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Pshufd(Operand dest, Operand source, byte imm)
         {
-            WriteInstruction(dest, null, source, X86Instruction.Pshufd);
+            WriteInstruction(dest, default, source, X86Instruction.Pshufd);
 
             WriteByte(imm);
         }
@@ -704,7 +593,7 @@ namespace ARMeilleure.CodeGen.X86
             }
             else
             {
-                WriteInstruction(null, source, source.Type, X86Instruction.Push);
+                WriteInstruction(default, source, source.Type, X86Instruction.Push);
             }
         }
 
@@ -735,9 +624,14 @@ namespace ARMeilleure.CodeGen.X86
 
         public void Setcc(Operand dest, X86Condition condition)
         {
-            InstructionInfo info = _instTable[(int)X86Instruction.Setcc];
+            ref readonly InstructionInfo info = ref _instTable[(int)X86Instruction.Setcc];
 
-            WriteOpCode(dest, null, null, OperandType.None, info.Flags, info.OpRRM | (int)condition);
+            WriteOpCode(dest, default, default, OperandType.None, info.Flags, info.OpRRM | (int)condition);
+        }
+
+        public void Stmxcsr(Operand dest)
+        {
+            WriteInstruction(dest, default, OperandType.I32, X86Instruction.Stmxcsr);
         }
 
         public void Sub(Operand dest, Operand source, OperandType type)
@@ -776,7 +670,7 @@ namespace ARMeilleure.CodeGen.X86
             Operand source,
             OperandType type = OperandType.None)
         {
-            WriteInstruction(dest, null, source, inst, type);
+            WriteInstruction(dest, default, source, inst, type);
         }
 
         public void WriteInstruction(X86Instruction inst, Operand dest, Operand src1, Operand src2)
@@ -791,9 +685,19 @@ namespace ARMeilleure.CodeGen.X86
             }
         }
 
+        public void WriteInstruction(
+            X86Instruction inst,
+            Operand dest,
+            Operand src1,
+            Operand src2,
+            OperandType type)
+        {
+            WriteInstruction(dest, src1, src2, inst, type);
+        }
+
         public void WriteInstruction(X86Instruction inst, Operand dest, Operand source, byte imm)
         {
-            WriteInstruction(dest, null, source, inst);
+            WriteInstruction(dest, default, source, inst);
 
             WriteByte(imm);
         }
@@ -831,12 +735,13 @@ namespace ARMeilleure.CodeGen.X86
             {
                 X86Register shiftReg = (X86Register)source.GetRegister().Index;
 
-                if (shiftReg != X86Register.Rcx)
-                {
-                    throw new ArgumentException($"Invalid shift register \"{shiftReg}\".");
-                }
+                Debug.Assert(shiftReg == X86Register.Rcx, $"Invalid shift register \"{shiftReg}\".");
 
-                source = null;
+                source = default;
+            }
+            else if (source.Kind == OperandKind.Constant)
+            {
+                source = Operand.Factory.Const((int)source.Value & (dest.Type == OperandType.I32 ? 0x1f : 0x3f));
             }
 
             WriteInstruction(dest, source, type, inst);
@@ -844,9 +749,9 @@ namespace ARMeilleure.CodeGen.X86
 
         private void WriteInstruction(Operand dest, Operand source, OperandType type, X86Instruction inst)
         {
-            InstructionInfo info = _instTable[(int)inst];
+            ref readonly InstructionInfo info = ref _instTable[(int)inst];
 
-            if (source != null)
+            if (source != default)
             {
                 if (source.Kind == OperandKind.Constant)
                 {
@@ -854,29 +759,29 @@ namespace ARMeilleure.CodeGen.X86
 
                     if (inst == X86Instruction.Mov8)
                     {
-                        WriteOpCode(dest, null, null, type, info.Flags, info.OpRMImm8);
+                        WriteOpCode(dest, default, default, type, info.Flags, info.OpRMImm8);
 
                         WriteByte((byte)imm);
                     }
                     else if (inst == X86Instruction.Mov16)
                     {
-                        WriteOpCode(dest, null, null, type, info.Flags, info.OpRMImm32);
+                        WriteOpCode(dest, default, default, type, info.Flags, info.OpRMImm32);
 
                         WriteInt16((short)imm);
                     }
                     else if (IsImm8(imm, type) && info.OpRMImm8 != BadOp)
                     {
-                        WriteOpCode(dest, null, null, type, info.Flags, info.OpRMImm8);
+                        WriteOpCode(dest, default, default, type, info.Flags, info.OpRMImm8);
 
                         WriteByte((byte)imm);
                     }
-                    else if (IsImm32(imm, type) && info.OpRMImm32 != BadOp)
+                    else if (!source.Relocatable && IsImm32(imm, type) && info.OpRMImm32 != BadOp)
                     {
-                        WriteOpCode(dest, null, null, type, info.Flags, info.OpRMImm32);
+                        WriteOpCode(dest, default, default, type, info.Flags, info.OpRMImm32);
 
                         WriteInt32((int)imm);
                     }
-                    else if (dest != null && dest.Kind == OperandKind.Register && info.OpRImm64 != BadOp)
+                    else if (dest != default && dest.Kind == OperandKind.Register && info.OpRImm64 != BadOp)
                     {
                         int rexPrefix = GetRexPrefix(dest, source, type, rrm: false);
 
@@ -887,6 +792,16 @@ namespace ARMeilleure.CodeGen.X86
 
                         WriteByte((byte)(info.OpRImm64 + (dest.GetRegister().Index & 0b111)));
 
+                        if (HasRelocs && source.Relocatable)
+                        {
+                            _relocs.Add(new Reloc
+                            {
+                                JumpIndex = _jumps.Count - 1,
+                                Position = (int)_stream.Position,
+                                Symbol = source.Symbol
+                            });
+                        }
+
                         WriteUInt64(imm);
                     }
                     else
@@ -896,11 +811,11 @@ namespace ARMeilleure.CodeGen.X86
                 }
                 else if (source.Kind == OperandKind.Register && info.OpRMR != BadOp)
                 {
-                    WriteOpCode(dest, null, source, type, info.Flags, info.OpRMR);
+                    WriteOpCode(dest, default, source, type, info.Flags, info.OpRMR);
                 }
                 else if (info.OpRRM != BadOp)
                 {
-                    WriteOpCode(dest, null, source, type, info.Flags, info.OpRRM, rrm: true);
+                    WriteOpCode(dest, default, source, type, info.Flags, info.OpRRM, rrm: true);
                 }
                 else
                 {
@@ -909,11 +824,11 @@ namespace ARMeilleure.CodeGen.X86
             }
             else if (info.OpRRM != BadOp)
             {
-                WriteOpCode(dest, null, source, type, info.Flags, info.OpRRM, rrm: true);
+                WriteOpCode(dest, default, source, type, info.Flags, info.OpRRM, rrm: true);
             }
             else if (info.OpRMR != BadOp)
             {
-                WriteOpCode(dest, null, source, type, info.Flags, info.OpRMR);
+                WriteOpCode(dest, default, source, type, info.Flags, info.OpRMR);
             }
             else
             {
@@ -928,9 +843,9 @@ namespace ARMeilleure.CodeGen.X86
             X86Instruction inst,
             OperandType type = OperandType.None)
         {
-            InstructionInfo info = _instTable[(int)inst];
+            ref readonly InstructionInfo info = ref _instTable[(int)inst];
 
-            if (src2 != null)
+            if (src2 != default)
             {
                 if (src2.Kind == OperandKind.Constant)
                 {
@@ -938,7 +853,7 @@ namespace ARMeilleure.CodeGen.X86
 
                     if ((byte)imm == imm && info.OpRMImm8 != BadOp)
                     {
-                        WriteOpCode(dest, src1, null, type, info.Flags, info.OpRMImm8);
+                        WriteOpCode(dest, src1, default, type, info.Flags, info.OpRMImm8);
 
                         WriteByte((byte)imm);
                     }
@@ -992,9 +907,10 @@ namespace ARMeilleure.CodeGen.X86
 
             int modRM = (opCode >> OpModRMBits) << 3;
 
-            MemoryOperand memOp = null;
+            MemoryOperand memOp = default;
+            bool hasMemOp = false;
 
-            if (dest != null)
+            if (dest != default)
             {
                 if (dest.Kind == OperandKind.Register)
                 {
@@ -1009,7 +925,8 @@ namespace ARMeilleure.CodeGen.X86
                 }
                 else if (dest.Kind == OperandKind.Memory)
                 {
-                    memOp = dest as MemoryOperand;
+                    memOp = dest.GetMemory();
+                    hasMemOp = true;
                 }
                 else
                 {
@@ -1017,7 +934,7 @@ namespace ARMeilleure.CodeGen.X86
                 }
             }
 
-            if (src2 != null)
+            if (src2 != default)
             {
                 if (src2.Kind == OperandKind.Register)
                 {
@@ -1030,9 +947,10 @@ namespace ARMeilleure.CodeGen.X86
                         rexPrefix |= RexPrefix;
                     }
                 }
-                else if (src2.Kind == OperandKind.Memory && memOp == null)
+                else if (src2.Kind == OperandKind.Memory && !hasMemOp)
                 {
-                    memOp = src2 as MemoryOperand;
+                    memOp = src2.GetMemory();
+                    hasMemOp = true;
                 }
                 else
                 {
@@ -1045,14 +963,14 @@ namespace ARMeilleure.CodeGen.X86
 
             int sib = 0;
 
-            if (memOp != null)
+            if (hasMemOp)
             {
                 // Either source or destination is a memory operand.
                 Register baseReg = memOp.BaseAddress.GetRegister();
 
                 X86Register baseRegLow = (X86Register)(baseReg.Index & 0b111);
 
-                needsSibByte      = memOp.Index != null     || baseRegLow == X86Register.Rsp;
+                needsSibByte      = memOp.Index != default  || baseRegLow == X86Register.Rsp;
                 needsDisplacement = memOp.Displacement != 0 || baseRegLow == X86Register.Rbp;
 
                 if (needsDisplacement)
@@ -1069,6 +987,8 @@ namespace ARMeilleure.CodeGen.X86
 
                 if (baseReg.Index >= 8)
                 {
+                    Debug.Assert((uint)baseReg.Index <= MaxRegNumber);
+
                     rexPrefix |= RexPrefix | (baseReg.Index >> 3);
                 }
 
@@ -1076,17 +996,16 @@ namespace ARMeilleure.CodeGen.X86
                 {
                     sib = (int)baseRegLow;
 
-                    if (memOp.Index != null)
+                    if (memOp.Index != default)
                     {
                         int indexReg = memOp.Index.GetRegister().Index;
 
-                        if (indexReg == (int)X86Register.Rsp)
-                        {
-                            throw new ArgumentException("Using RSP as index register on the memory operand is not allowed.");
-                        }
+                        Debug.Assert(indexReg != (int)X86Register.Rsp, "Using RSP as index register on the memory operand is not allowed.");
 
                         if (indexReg >= 8)
                         {
+                            Debug.Assert((uint)indexReg <= MaxRegNumber);
+
                             rexPrefix |= RexPrefix | (indexReg >> 3) << 1;
                         }
 
@@ -1116,9 +1035,17 @@ namespace ARMeilleure.CodeGen.X86
 
             if ((flags & InstructionFlags.Vex) != 0 && HardwareCapabilities.SupportsVexEncoding)
             {
-                int vexByte2 = (int)(flags & InstructionFlags.PrefixMask) >> (int)InstructionFlags.PrefixBit;
+                // In a vex encoding, only one prefix can be active at a time. The active prefix is encoded in the second byte using two bits.
 
-                if (src1 != null)
+                int vexByte2 = (flags & InstructionFlags.PrefixMask) switch
+                {
+                    InstructionFlags.Prefix66 => 1,
+                    InstructionFlags.PrefixF3 => 2,
+                    InstructionFlags.PrefixF2 => 3,
+                    _ => 0
+                };
+
+                if (src1 != default)
                 {
                     vexByte2 |= (src1.GetRegister().Index ^ 0xf) << 3;
                 }
@@ -1164,11 +1091,19 @@ namespace ARMeilleure.CodeGen.X86
             }
             else
             {
-                switch (flags & InstructionFlags.PrefixMask)
+                if (flags.HasFlag(InstructionFlags.Prefix66))
                 {
-                    case InstructionFlags.Prefix66: WriteByte(0x66); break;
-                    case InstructionFlags.PrefixF2: WriteByte(0xf2); break;
-                    case InstructionFlags.PrefixF3: WriteByte(0xf3); break;
+                    WriteByte(0x66);
+                }
+
+                if (flags.HasFlag(InstructionFlags.PrefixF2))
+                {
+                    WriteByte(0xf2);
+                }
+
+                if (flags.HasFlag(InstructionFlags.PrefixF3))
+                {
+                    WriteByte(0xf3);
                 }
 
                 if (rexPrefix != 0)
@@ -1177,7 +1112,7 @@ namespace ARMeilleure.CodeGen.X86
                 }
             }
 
-            if (dest != null && (flags & InstructionFlags.RegOnly) != 0)
+            if (dest != default && (flags & InstructionFlags.RegOnly) != 0)
             {
                 opCode += dest.GetRegister().Index & 7;
             }
@@ -1246,17 +1181,173 @@ namespace ARMeilleure.CodeGen.X86
                 }
             }
 
-            if (dest != null && dest.Kind == OperandKind.Register)
+            if (dest != default && dest.Kind == OperandKind.Register)
             {
                 SetRegisterHighBit(dest.GetRegister(), rrm ? 2 : 0);
             }
 
-            if (source != null && source.Kind == OperandKind.Register)
+            if (source != default && source.Kind == OperandKind.Register)
             {
                 SetRegisterHighBit(source.GetRegister(), rrm ? 0 : 2);
             }
 
             return rexPrefix;
+        }
+
+        public (byte[], RelocInfo) GetCode()
+        {
+            var jumps = CollectionsMarshal.AsSpan(_jumps);
+            var relocs = CollectionsMarshal.AsSpan(_relocs);
+
+            // Write jump relative offsets.
+            bool modified;
+
+            do
+            {
+                modified = false;
+
+                for (int i = 0; i < jumps.Length; i++)
+                {
+                    ref Jump jump = ref jumps[i];
+
+                    // If jump target not resolved yet, resolve it.
+                    if (jump.JumpTarget == null)
+                    {
+                        jump.JumpTarget = _labels[jump.JumpLabel];
+                    }
+
+                    long jumpTarget = jump.JumpTarget.Value;
+                    long offset = jumpTarget - jump.JumpPosition;
+
+                    if (offset < 0)
+                    {
+                        for (int j = i - 1; j >= 0; j--)
+                        {
+                            ref Jump jump2 = ref jumps[j];
+
+                            if (jump2.JumpPosition < jumpTarget)
+                            {
+                                break;
+                            }
+
+                            offset -= jump2.InstSize - ReservedBytesForJump;
+                        }
+                    }
+                    else
+                    {
+                        for (int j = i + 1; j < jumps.Length; j++)
+                        {
+                            ref Jump jump2 = ref jumps[j];
+
+                            if (jump2.JumpPosition >= jumpTarget)
+                            {
+                                break;
+                            }
+
+                            offset += jump2.InstSize - ReservedBytesForJump;
+                        }
+
+                        offset -= ReservedBytesForJump;
+                    }
+
+                    if (jump.IsConditional)
+                    {
+                        jump.InstSize = GetJccLength(offset);
+                    }
+                    else
+                    {
+                        jump.InstSize = GetJmpLength(offset);
+                    }
+
+                    // The jump is relative to the next instruction, not the current one.
+                    // Since we didn't know the next instruction address when calculating
+                    // the offset (as the size of the current jump instruction was not known),
+                    // we now need to compensate the offset with the jump instruction size.
+                    // It's also worth noting that:
+                    // - This is only needed for backward jumps.
+                    // - The GetJmpLength and GetJccLength also compensates the offset
+                    // internally when computing the jump instruction size.
+                    if (offset < 0)
+                    {
+                        offset -= jump.InstSize;
+                    }
+
+                    if (jump.Offset != offset)
+                    {
+                        jump.Offset = offset;
+
+                        modified = true;
+                    }
+                }
+            }
+            while (modified);
+
+            // Write the code, ignoring the dummy bytes after jumps, into a new stream.
+            _stream.Seek(0, SeekOrigin.Begin);
+
+            using var codeStream = new MemoryStream();
+            var assembler = new Assembler(codeStream, HasRelocs);
+
+            bool hasRelocs = HasRelocs;
+            int relocIndex = 0;
+            int relocOffset = 0;
+            var relocEntries = hasRelocs
+                ? new RelocEntry[relocs.Length]
+                : Array.Empty<RelocEntry>();
+
+            for (int i = 0; i < jumps.Length; i++)
+            {
+                ref Jump jump = ref jumps[i];
+
+                // If has relocations, calculate their new positions compensating for jumps.
+                if (hasRelocs)
+                {
+                    relocOffset += jump.InstSize - ReservedBytesForJump;
+
+                    for (; relocIndex < relocEntries.Length; relocIndex++)
+                    {
+                        ref Reloc reloc = ref relocs[relocIndex];
+
+                        if (reloc.JumpIndex > i)
+                        {
+                            break;
+                        }
+
+                        relocEntries[relocIndex] = new RelocEntry(reloc.Position + relocOffset, reloc.Symbol);
+                    }
+                }
+
+                Span<byte> buffer = new byte[jump.JumpPosition - _stream.Position];
+
+                _stream.Read(buffer);
+                _stream.Seek(ReservedBytesForJump, SeekOrigin.Current);
+
+                codeStream.Write(buffer);
+
+                if (jump.IsConditional)
+                {
+                    assembler.Jcc(jump.Condition, jump.Offset);
+                }
+                else
+                {
+                    assembler.Jmp(jump.Offset);
+                }
+            }
+
+            // Write remaining relocations. This case happens when there are no jumps assembled.
+            for (; relocIndex < relocEntries.Length; relocIndex++)
+            {
+                ref Reloc reloc = ref relocs[relocIndex];
+
+                relocEntries[relocIndex] = new RelocEntry(reloc.Position + relocOffset, reloc.Symbol);
+            }
+
+            _stream.CopyTo(codeStream);
+
+            var code = codeStream.ToArray();
+            var relocInfo = new RelocInfo(relocEntries);
+
+            return (code, relocInfo);
         }
 
         private static bool Is64Bits(OperandType type)
@@ -1278,7 +1369,7 @@ namespace ARMeilleure.CodeGen.X86
             return ConstFitsOnS32(value);
         }
 
-        public static int GetJccLength(long offset)
+        private static int GetJccLength(long offset)
         {
             if (ConstFitsOnS8(offset < 0 ? offset - 2 : offset))
             {
@@ -1294,7 +1385,7 @@ namespace ARMeilleure.CodeGen.X86
             }
         }
 
-        public static int GetJmpLength(long offset)
+        private static int GetJmpLength(long offset)
         {
             if (ConstFitsOnS8(offset < 0 ? offset - 2 : offset))
             {

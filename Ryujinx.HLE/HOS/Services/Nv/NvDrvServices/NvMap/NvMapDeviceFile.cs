@@ -1,9 +1,8 @@
 ﻿using Ryujinx.Common;
 using Ryujinx.Common.Logging;
-using Ryujinx.Graphics.Memory;
-using Ryujinx.HLE.HOS.Kernel.Process;
+using Ryujinx.Graphics.Gpu.Memory;
+using Ryujinx.Memory;
 using System;
-using System.Collections.Concurrent;
 
 namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 {
@@ -11,13 +10,10 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
     {
         private const int FlagNotFreedYet = 1;
 
-        private static ConcurrentDictionary<KProcess, IdDictionary> _maps = new ConcurrentDictionary<KProcess, IdDictionary>();
+        private static NvMapIdDictionary _maps = new NvMapIdDictionary();
 
-        public NvMapDeviceFile(ServiceCtx context) : base(context)
+        public NvMapDeviceFile(ServiceCtx context, IVirtualMemoryManager memory, ulong owner) : base(context, owner)
         {
-            IdDictionary dict = _maps.GetOrAdd(Owner, (key) => new IdDictionary());
-
-            dict.Add(0, new NvMapHandle());
         }
 
         public override NvInternalResult Ioctl(NvIoctl command, Span<byte> arguments)
@@ -68,16 +64,16 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
         {
             if (arguments.Size == 0)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid size 0x{arguments.Size:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid size 0x{arguments.Size:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
 
-            int size = BitUtils.AlignUp(arguments.Size, NvGpuVmm.PageSize);
+            int size = BitUtils.AlignUp(arguments.Size, (int)MemoryManager.PageSize);
 
             arguments.Handle = CreateHandleFromMap(new NvMapHandle(size));
 
-            Logger.PrintInfo(LogClass.ServiceNv, $"Created map {arguments.Handle} with size 0x{size:x8}!");
+            Logger.Debug?.Print(LogClass.ServiceNv, $"Created map {arguments.Handle} with size 0x{size:x8}!");
 
             return NvInternalResult.Success;
         }
@@ -88,7 +84,7 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 
             if (map == null)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
@@ -106,21 +102,21 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 
             if (map == null)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
 
             if ((arguments.Align & (arguments.Align - 1)) != 0)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid alignment 0x{arguments.Align:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid alignment 0x{arguments.Align:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
 
-            if ((uint)arguments.Align < NvGpuVmm.PageSize)
+            if ((uint)arguments.Align < MemoryManager.PageSize)
             {
-                arguments.Align = NvGpuVmm.PageSize;
+                arguments.Align = (int)MemoryManager.PageSize;
             }
 
             NvInternalResult result = NvInternalResult.Success;
@@ -132,9 +128,9 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
                 map.Align =       arguments.Align;
                 map.Kind  = (byte)arguments.Kind;
 
-                int size = BitUtils.AlignUp(map.Size, NvGpuVmm.PageSize);
+                int size = BitUtils.AlignUp(map.Size, (int)MemoryManager.PageSize);
 
-                long address = arguments.Address;
+                ulong address = arguments.Address;
 
                 if (address == 0)
                 {
@@ -160,17 +156,13 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 
             if (map == null)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
 
-            if (map.DecrementRefCount() <= 0)
+            if (DecrementMapRefCount(Owner, arguments.Handle))
             {
-                DeleteMapWithHandle(arguments.Handle);
-
-                Logger.PrintInfo(LogClass.ServiceNv, $"Deleted map {arguments.Handle}!");
-
                 arguments.Address = map.Address;
                 arguments.Flags   = 0;
             }
@@ -191,7 +183,7 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 
             if (map == null)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
@@ -218,7 +210,7 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 
             if (map == null)
             {
-                Logger.PrintWarning(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
+                Logger.Warning?.Print(LogClass.ServiceNv, $"Invalid handle 0x{arguments.Handle:x8}!");
 
                 return NvInternalResult.InvalidInput;
             }
@@ -236,36 +228,45 @@ namespace Ryujinx.HLE.HOS.Services.Nv.NvDrvServices.NvMap
 
         private int CreateHandleFromMap(NvMapHandle map)
         {
-            IdDictionary dict = _maps.GetOrAdd(Owner, (key) =>
-            {
-                IdDictionary newDict = new IdDictionary();
-
-                newDict.Add(0, new NvMapHandle());
-
-                return newDict;
-            });
-
-            return dict.Add(map);
+            return _maps.Add(map);
         }
 
-        private bool DeleteMapWithHandle(int handle)
+        private static bool DeleteMapWithHandle(ulong pid, int handle)
         {
-            if (_maps.TryGetValue(Owner, out IdDictionary dict))
-            {
-                return dict.Delete(handle) != null;
-            }
-
-            return false;
+            return _maps.Delete(handle) != null;
         }
 
-        public static NvMapHandle GetMapFromHandle(KProcess process, int handle, bool allowHandleZero = false)
+        public static void IncrementMapRefCount(ulong pid, int handle)
         {
-            if ((allowHandleZero || handle != 0) && _maps.TryGetValue(process, out IdDictionary dict))
+            GetMapFromHandle(pid, handle)?.IncrementRefCount();
+        }
+
+        public static bool DecrementMapRefCount(ulong pid, int handle)
+        {
+            NvMapHandle map = GetMapFromHandle(pid, handle);
+
+            if (map == null)
             {
-                return dict.GetData<NvMapHandle>(handle);
+                return false;
             }
 
-            return null;
+            if (map.DecrementRefCount() <= 0)
+            {
+                DeleteMapWithHandle(pid, handle);
+
+                Logger.Debug?.Print(LogClass.ServiceNv, $"Deleted map {handle}!");
+
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        public static NvMapHandle GetMapFromHandle(ulong pid, int handle)
+        {
+            return _maps.Get(handle);
         }
     }
 }

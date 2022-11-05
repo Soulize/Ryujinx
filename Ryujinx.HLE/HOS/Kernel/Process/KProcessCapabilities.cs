@@ -1,7 +1,8 @@
-using Ryujinx.Common;
 using Ryujinx.HLE.HOS.Kernel.Common;
 using Ryujinx.HLE.HOS.Kernel.Memory;
 using Ryujinx.HLE.HOS.Kernel.Threading;
+using System;
+using System.Numerics;
 
 namespace Ryujinx.HLE.HOS.Kernel.Process
 {
@@ -10,8 +11,8 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
         public byte[] SvcAccessMask { get; private set; }
         public byte[] IrqAccessMask { get; private set; }
 
-        public long AllowedCpuCoresMask    { get; private set; }
-        public long AllowedThreadPriosMask { get; private set; }
+        public ulong AllowedCpuCoresMask    { get; private set; }
+        public ulong AllowedThreadPriosMask { get; private set; }
 
         public int DebuggingFlags       { get; private set; }
         public int HandleTableSize      { get; private set; }
@@ -24,29 +25,29 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
             IrqAccessMask = new byte[0x80];
         }
 
-        public KernelResult InitializeForKernel(int[] caps, KMemoryManager memoryManager)
+        public KernelResult InitializeForKernel(ReadOnlySpan<int> capabilities, KPageTableBase memoryManager)
         {
             AllowedCpuCoresMask    = 0xf;
-            AllowedThreadPriosMask = -1;
+            AllowedThreadPriosMask = ulong.MaxValue;
             DebuggingFlags        &= ~3;
             KernelReleaseVersion   = KProcess.KernelVersionPacked;
 
-            return Parse(caps, memoryManager);
+            return Parse(capabilities, memoryManager);
         }
 
-        public KernelResult InitializeForUser(int[] caps, KMemoryManager memoryManager)
+        public KernelResult InitializeForUser(ReadOnlySpan<int> capabilities, KPageTableBase memoryManager)
         {
-            return Parse(caps, memoryManager);
+            return Parse(capabilities, memoryManager);
         }
 
-        private KernelResult Parse(int[] caps, KMemoryManager memoryManager)
+        private KernelResult Parse(ReadOnlySpan<int> capabilities, KPageTableBase memoryManager)
         {
             int mask0 = 0;
             int mask1 = 0;
 
-            for (int index = 0; index < caps.Length; index++)
+            for (int index = 0; index < capabilities.Length; index++)
             {
-                int cap = caps[index];
+                int cap = capabilities[index];
 
                 if (((cap + 1) & ~cap) != 0x40)
                 {
@@ -59,14 +60,14 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
                 }
                 else
                 {
-                    if ((uint)index + 1 >= caps.Length)
+                    if ((uint)index + 1 >= capabilities.Length)
                     {
                         return KernelResult.InvalidCombination;
                     }
 
                     int prevCap = cap;
 
-                    cap = caps[++index];
+                    cap = capabilities[++index];
 
                     if (((cap + 1) & ~cap) != 0x40)
                     {
@@ -91,9 +92,9 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
                         return KernelResult.InvalidAddress;
                     }
 
-                    MemoryPermission perm = (prevCap >> 31) != 0
-                        ? MemoryPermission.Read
-                        : MemoryPermission.ReadAndWrite;
+                    KMemoryPermission perm = (prevCap >> 31) != 0
+                        ? KMemoryPermission.Read
+                        : KMemoryPermission.ReadAndWrite;
 
                     KernelResult result;
 
@@ -116,7 +117,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
             return KernelResult.Success;
         }
 
-        private KernelResult ParseCapability(int cap, ref int mask0, ref int mask1, KMemoryManager memoryManager)
+        private KernelResult ParseCapability(int cap, ref int mask0, ref int mask1, KPageTableBase memoryManager)
         {
             int code = (cap + 1) & ~cap;
 
@@ -129,7 +130,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
                 return KernelResult.Success;
             }
 
-            int codeMask = 1 << (32 - BitUtils.CountLeadingZeros32(code + 1));
+            int codeMask = 1 << (32 - BitOperations.LeadingZeroCount((uint)code + 1));
 
             // Check if the property was already set.
             if (((mask0 & codeMask) & 0x1e008) != 0)
@@ -216,7 +217,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
                 {
                     long address = ((long)(uint)cap << 4) & 0xffffff000;
 
-                    memoryManager.MapIoMemory(address, KMemoryManager.PageSize, MemoryPermission.ReadAndWrite);
+                    memoryManager.MapIoMemory(address, KPageTableBase.PageSize, KMemoryPermission.ReadAndWrite);
 
                     break;
                 }
@@ -302,16 +303,16 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
             return KernelResult.Success;
         }
 
-        private static long GetMaskFromMinMax(int min, int max)
+        private static ulong GetMaskFromMinMax(int min, int max)
         {
             int range = max - min + 1;
 
             if (range == 64)
             {
-                return -1L;
+                return ulong.MaxValue;
             }
 
-            long mask = (1L << range) - 1;
+            ulong mask = (1UL << range) - 1;
 
             return mask << min;
         }

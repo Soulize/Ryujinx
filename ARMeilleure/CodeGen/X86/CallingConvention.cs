@@ -1,5 +1,4 @@
 using System;
-using System.Runtime.InteropServices;
 
 namespace ARMeilleure.CodeGen.X86
 {
@@ -151,7 +150,7 @@ namespace ARMeilleure.CodeGen.X86
 
         public static CallConvName GetCurrentCallConv()
         {
-            return RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            return OperatingSystem.IsWindows()
                 ? CallConvName.Windows
                 : CallConvName.SystemV;
         }

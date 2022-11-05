@@ -5,7 +5,8 @@ using System;
 using System.Diagnostics;
 
 using static ARMeilleure.Instructions.InstEmitHelper;
-using static ARMeilleure.IntermediateRepresentation.OperandHelper;
+using static ARMeilleure.Instructions.InstEmitMemoryExHelper;
+using static ARMeilleure.IntermediateRepresentation.Operand.Factory;
 
 namespace ARMeilleure.Instructions
 {
@@ -22,7 +23,12 @@ namespace ARMeilleure.Instructions
 
         public static void Clrex(ArmEmitterContext context)
         {
-            context.Call(new _Void(NativeInterface.ClearExclusive));
+            EmitClearExclusive(context);
+        }
+
+        public static void Csdb(ArmEmitterContext context)
+        {
+            // Execute as no-op.
         }
 
         public static void Dmb(ArmEmitterContext context) => EmitBarrier(context);
@@ -66,7 +72,7 @@ namespace ARMeilleure.Instructions
                 // method to read 128-bits atomically.
                 if (op.Size == 2)
                 {
-                    Operand value = EmitLoad(context, address, exclusive, 3);
+                    Operand value = EmitLoadExclusive(context, address, exclusive, 3);
 
                     Operand valueLow = context.ConvertI64ToI32(value);
 
@@ -79,7 +85,7 @@ namespace ARMeilleure.Instructions
                 }
                 else if (op.Size == 3)
                 {
-                    Operand value = EmitLoad(context, address, exclusive, 4);
+                    Operand value = EmitLoadExclusive(context, address, exclusive, 4);
 
                     Operand valueLow  = context.VectorExtract(OperandType.I64, value, 0);
                     Operand valueHigh = context.VectorExtract(OperandType.I64, value, 1);
@@ -95,47 +101,13 @@ namespace ARMeilleure.Instructions
             else
             {
                 // 8, 16, 32 or 64-bits (non-pairwise) load.
-                Operand value = EmitLoad(context, address, exclusive, op.Size);
+                Operand value = EmitLoadExclusive(context, address, exclusive, op.Size);
 
                 SetIntOrZR(context, op.Rt, value);
             }
         }
 
-        private static Operand EmitLoad(
-            ArmEmitterContext context,
-            Operand address,
-            bool exclusive,
-            int size)
-        {
-            Delegate fallbackMethodDlg = null;
-
-            if (exclusive)
-            {
-                switch (size)
-                {
-                    case 0: fallbackMethodDlg = new _U8_U64  (NativeInterface.ReadByteExclusive);      break;
-                    case 1: fallbackMethodDlg = new _U16_U64 (NativeInterface.ReadUInt16Exclusive);    break;
-                    case 2: fallbackMethodDlg = new _U32_U64 (NativeInterface.ReadUInt32Exclusive);    break;
-                    case 3: fallbackMethodDlg = new _U64_U64 (NativeInterface.ReadUInt64Exclusive);    break;
-                    case 4: fallbackMethodDlg = new _V128_U64(NativeInterface.ReadVector128Exclusive); break;
-                }
-            }
-            else
-            {
-                switch (size)
-                {
-                    case 0: fallbackMethodDlg = new _U8_U64  (NativeInterface.ReadByte);      break;
-                    case 1: fallbackMethodDlg = new _U16_U64 (NativeInterface.ReadUInt16);    break;
-                    case 2: fallbackMethodDlg = new _U32_U64 (NativeInterface.ReadUInt32);    break;
-                    case 3: fallbackMethodDlg = new _U64_U64 (NativeInterface.ReadUInt64);    break;
-                    case 4: fallbackMethodDlg = new _V128_U64(NativeInterface.ReadVector128); break;
-                }
-            }
-
-            return context.Call(fallbackMethodDlg, address);
-        }
-
-        public static void Pfrm(ArmEmitterContext context)
+        public static void Prfm(ArmEmitterContext context)
         {
             // Memory Prefetch, execute as no-op.
         }
@@ -163,16 +135,9 @@ namespace ARMeilleure.Instructions
             bool ordered   = (accType & AccessType.Ordered)   != 0;
             bool exclusive = (accType & AccessType.Exclusive) != 0;
 
-            if (ordered)
-            {
-                EmitBarrier(context);
-            }
-
             Operand address = context.Copy(GetIntOrSP(context, op.Rn));
 
             Operand t = GetIntOrZR(context, op.Rt);
-
-            Operand s = null;
 
             if (pair)
             {
@@ -192,70 +157,22 @@ namespace ARMeilleure.Instructions
                     value = context.VectorInsert(value,                t2, 1);
                 }
 
-                s = EmitStore(context, address, value, exclusive, op.Size + 1);
+                EmitStoreExclusive(context, address, value, exclusive, op.Size + 1, op.Rs, a32: false);
             }
             else
             {
-                s = EmitStore(context, address, t, exclusive, op.Size);
+                EmitStoreExclusive(context, address, t, exclusive, op.Size, op.Rs, a32: false);
             }
 
-            if (s != null)
+            if (ordered)
             {
-                // This is only needed for exclusive stores. The function returns 0
-                // when the store is successful, and 1 otherwise.
-                SetIntOrZR(context, op.Rs, s);
-            }
-        }
-
-        private static Operand EmitStore(
-            ArmEmitterContext context,
-            Operand address,
-            Operand value,
-            bool exclusive,
-            int size)
-        {
-            if (size < 3)
-            {
-                value = context.ConvertI64ToI32(value);
-            }
-
-            Delegate fallbackMethodDlg = null;
-
-            if (exclusive)
-            {
-                switch (size)
-                {
-                    case 0: fallbackMethodDlg = new _S32_U64_U8  (NativeInterface.WriteByteExclusive);      break;
-                    case 1: fallbackMethodDlg = new _S32_U64_U16 (NativeInterface.WriteUInt16Exclusive);    break;
-                    case 2: fallbackMethodDlg = new _S32_U64_U32 (NativeInterface.WriteUInt32Exclusive);    break;
-                    case 3: fallbackMethodDlg = new _S32_U64_U64 (NativeInterface.WriteUInt64Exclusive);    break;
-                    case 4: fallbackMethodDlg = new _S32_U64_V128(NativeInterface.WriteVector128Exclusive); break;
-                }
-
-                return context.Call(fallbackMethodDlg, address, value);
-            }
-            else
-            {
-                switch (size)
-                {
-                    case 0: fallbackMethodDlg = new _Void_U64_U8  (NativeInterface.WriteByte);      break;
-                    case 1: fallbackMethodDlg = new _Void_U64_U16 (NativeInterface.WriteUInt16);    break;
-                    case 2: fallbackMethodDlg = new _Void_U64_U32 (NativeInterface.WriteUInt32);    break;
-                    case 3: fallbackMethodDlg = new _Void_U64_U64 (NativeInterface.WriteUInt64);    break;
-                    case 4: fallbackMethodDlg = new _Void_U64_V128(NativeInterface.WriteVector128); break;
-                }
-
-                context.Call(fallbackMethodDlg, address, value);
-
-                return null;
+                EmitBarrier(context);
             }
         }
 
         private static void EmitBarrier(ArmEmitterContext context)
         {
-            // Note: This barrier is most likely not necessary, and probably
-            // doesn't make any difference since we need to do a ton of stuff
-            // (software MMU emulation) to read or write anything anyway.
+            context.MemoryBarrier();
         }
     }
 }

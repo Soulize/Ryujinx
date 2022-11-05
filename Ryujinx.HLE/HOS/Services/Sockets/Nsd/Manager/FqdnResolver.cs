@@ -6,99 +6,61 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Nsd.Manager
     {
         private const string _dummyAddress = "unknown.dummy.nintendo.net";
 
-        private NsdSettings _nsdSettings;
-
-        public FqdnResolver(NsdSettings nsdSettings)
+        public ResultCode GetEnvironmentIdentifier(out string identifier)
         {
-            _nsdSettings = nsdSettings;
-        }
-
-        public ResultCode GetSettingName(ServiceCtx context, out string settingName)
-        {
-            if (_nsdSettings.TestMode)
+            if (IManager.NsdSettings.TestMode)
             {
-                settingName = "";
+                identifier = "err";
 
-                return ResultCode.NotImplemented;
+                return ResultCode.InvalidSettingsValue;
             }
             else
             {
-                settingName = "";
-
-                if (true) // TODO: Determine field (struct + 0x2C)
-                {
-                    settingName = _nsdSettings.Environment;
-
-                    return ResultCode.Success;
-                }
-
-                return ResultCode.NullOutputObject;
-            }
-        }
-
-        public ResultCode GetEnvironmentIdentifier(ServiceCtx context, out string identifier)
-        {
-            if (_nsdSettings.TestMode)
-            {
-                identifier = "rre";
-
-                return ResultCode.NotImplemented;
-            }
-            else
-            {
-                identifier = _nsdSettings.Environment;
+                identifier = IManager.NsdSettings.Environment;
             }
 
             return ResultCode.Success;
         }
 
-        public ResultCode Resolve(ServiceCtx context, string address, out string resolvedAddress)
+        public static ResultCode Resolve(string address, out string resolvedAddress)
         {
-            if (address != "api.sect.srv.nintendo.net" || address != "conntest.nintendowifi.net")
+            if (address == "api.sect.srv.nintendo.net"     ||
+                address == "ctest.cdn.nintendo.net"        ||
+                address == "ctest.cdn.n.nintendoswitch.cn" ||
+                address == "unknown.dummy.nintendo.net")
+            {
+                resolvedAddress = address;
+            }
+            else
             {
                 // TODO: Load Environment from the savedata.
-                address = address.Replace("%", _nsdSettings.Environment);
+                address = address.Replace("%", IManager.NsdSettings.Environment);
 
                 resolvedAddress = "";
 
-                if (_nsdSettings == null)
+                if (IManager.NsdSettings == null)
                 {
                     return ResultCode.SettingsNotInitialized;
                 }
 
-                if (!_nsdSettings.Initialized)
+                if (!IManager.NsdSettings.Initialized)
                 {
                     return ResultCode.SettingsNotLoaded;
                 }
 
-                switch (address)
+                resolvedAddress = address switch
                 {
-                    case "e97b8a9d672e4ce4845ec6947cd66ef6-sb-api.accounts.nintendo.com": // dp1 environment
-                        resolvedAddress = "e97b8a9d672e4ce4845ec6947cd66ef6-sb.baas.nintendo.com";
-                        break;
-                    case "api.accounts.nintendo.com": // dp1 environment
-                        resolvedAddress = "e0d67c509fb203858ebcb2fe3f88c2aa.baas.nintendo.com";
-                        break;
-                    case "e97b8a9d672e4ce4845ec6947cd66ef6-sb.accounts.nintendo.com": // lp1 environment
-                        resolvedAddress = "e97b8a9d672e4ce4845ec6947cd66ef6-sb.baas.nintendo.com";
-                        break;
-                    case "accounts.nintendo.com": // lp1 environment
-                        resolvedAddress = "e0d67c509fb203858ebcb2fe3f88c2aa.baas.nintendo.com";
-                        break;
+                    "e97b8a9d672e4ce4845ec6947cd66ef6-sb-api.accounts.nintendo.com" => "e97b8a9d672e4ce4845ec6947cd66ef6-sb.baas.nintendo.com", // dp1 environment
+                    "api.accounts.nintendo.com"                                     => "e0d67c509fb203858ebcb2fe3f88c2aa.baas.nintendo.com",    // dp1 environment
+                    "e97b8a9d672e4ce4845ec6947cd66ef6-sb.accounts.nintendo.com"     => "e97b8a9d672e4ce4845ec6947cd66ef6-sb.baas.nintendo.com", // lp1 environment
+                    "accounts.nintendo.com"                                         => "e0d67c509fb203858ebcb2fe3f88c2aa.baas.nintendo.com",    // lp1 environment
                     /*
-                    // TODO: Determine fields of the struct.
-                    case "": // + 0xEB8 || + 0x2BE8
-                        resolvedAddress = ""; // + 0xEB8 + 0x300 || + 0x2BE8 + 0x300
-                        break;
+                        // TODO: Determine fields of the struct.
+                        this + 0xEB8  => this + 0xEB8 + 0x300
+                        this + 0x2BE8 => this + 0x2BE8 + 0x300
                     */
-                    default:
-                        resolvedAddress = address;
-                        break;
-                }
-            }
-            else
-            {
-                resolvedAddress = address;
+                    _ => address,
+                };
             }
 
             return ResultCode.Success;
@@ -106,19 +68,23 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Nsd.Manager
 
         public ResultCode ResolveEx(ServiceCtx context, out ResultCode resultCode, out string resolvedAddress)
         {
-            (long inputPosition, long inputSize)  = context.Request.GetBufferType0x21();
+            ulong inputPosition = context.Request.SendBuff[0].Position;
+            ulong inputSize     = context.Request.SendBuff[0].Size;
 
-            byte[] addressBuffer = context.Memory.ReadBytes(inputPosition, inputSize);
-            string address       = Encoding.UTF8.GetString(addressBuffer);
+            byte[] addressBuffer = new byte[inputSize];
 
-            resultCode = Resolve(context, address, out resolvedAddress);
+            context.Memory.Read(inputPosition, addressBuffer);
+
+            string address = Encoding.UTF8.GetString(addressBuffer).TrimEnd('\0');
+
+            resultCode = Resolve(address, out resolvedAddress);
 
             if (resultCode != ResultCode.Success)
             {
                 resolvedAddress = _dummyAddress;
             }
 
-            if (_nsdSettings.TestMode)
+            if (IManager.NsdSettings.TestMode)
             {
                 return ResultCode.Success;
             }

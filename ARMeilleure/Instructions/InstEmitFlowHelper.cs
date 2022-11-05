@@ -1,17 +1,17 @@
+using ARMeilleure.CodeGen.Linking;
 using ARMeilleure.Decoders;
 using ARMeilleure.IntermediateRepresentation;
 using ARMeilleure.State;
 using ARMeilleure.Translation;
+using ARMeilleure.Translation.PTC;
 
 using static ARMeilleure.Instructions.InstEmitHelper;
-using static ARMeilleure.IntermediateRepresentation.OperandHelper;
+using static ARMeilleure.IntermediateRepresentation.Operand.Factory;
 
 namespace ARMeilleure.Instructions
 {
     static class InstEmitFlowHelper
     {
-        public const ulong CallFlag = 1;
-
         public static void EmitCondBranch(ArmEmitterContext context, Operand target, Condition cond)
         {
             if (cond != Condition.Al)
@@ -28,7 +28,7 @@ namespace ARMeilleure.Instructions
         {
             Operand cmpResult = context.TryGetComparisonResult(condition);
 
-            if (cmpResult != null)
+            if (cmpResult != default)
             {
                 return cmpResult;
             }
@@ -142,51 +142,99 @@ namespace ARMeilleure.Instructions
 
         public static void EmitCall(ArmEmitterContext context, ulong immediate)
         {
-            context.Return(Const(immediate | CallFlag));
+            bool isRecursive = immediate == context.EntryAddress;
+
+            if (isRecursive)
+            {
+                context.Branch(context.GetLabel(immediate));
+            }
+            else
+            {
+                EmitTableBranch(context, Const(immediate), isJump: false);
+            }
         }
 
         public static void EmitVirtualCall(ArmEmitterContext context, Operand target)
         {
-            EmitVirtualCallOrJump(context, target, isJump: false);
+            EmitTableBranch(context, target, isJump: false);
         }
 
-        public static void EmitVirtualJump(ArmEmitterContext context, Operand target)
+        public static void EmitVirtualJump(ArmEmitterContext context, Operand target, bool isReturn)
         {
-            EmitVirtualCallOrJump(context, target, isJump: true);
-        }
-
-        private static void EmitVirtualCallOrJump(ArmEmitterContext context, Operand target, bool isJump)
-        {
-            context.Return(context.BitwiseOr(target, Const(target.Type, (long)CallFlag)));
-        }
-
-        private static void EmitContinueOrReturnCheck(ArmEmitterContext context, Operand retVal)
-        {
-            // Note: The return value of the called method will be placed
-            // at the Stack, the return value is always a Int64 with the
-            // return address of the function. We check if the address is
-            // correct, if it isn't we keep returning until we reach the dispatcher.
-            ulong nextAddr = GetNextOpAddress(context.CurrOp);
-
-            if (context.CurrBlock.Next != null)
+            if (isReturn)
             {
-                Operand lblContinue = Label();
+                if (target.Type == OperandType.I32)
+                {
+                    target = context.ZeroExtend32(OperandType.I64, target);
+                }
 
-                context.BranchIfTrue(lblContinue, context.ICompareEqual(retVal, Const(nextAddr)));
-
-                context.Return(Const(nextAddr));
-
-                context.MarkLabel(lblContinue);
+                context.Return(target);
             }
             else
             {
-                context.Return(Const(nextAddr));
+                EmitTableBranch(context, target, isJump: true);
             }
         }
 
-        private static ulong GetNextOpAddress(OpCode op)
+        private static void EmitTableBranch(ArmEmitterContext context, Operand guestAddress, bool isJump)
         {
-            return op.Address + (ulong)op.OpCodeSizeInBytes;
+            context.StoreToContext();
+
+            if (guestAddress.Type == OperandType.I32)
+            {
+                guestAddress = context.ZeroExtend32(OperandType.I64, guestAddress);
+            }
+
+            // Store the target guest address into the native context. The stubs uses this address to dispatch into the
+            // next translation.
+            Operand nativeContext = context.LoadArgument(OperandType.I64, 0);
+            Operand dispAddressAddr = context.Add(nativeContext, Const((ulong)NativeContext.GetDispatchAddressOffset()));
+            context.Store(dispAddressAddr, guestAddress);
+
+            Operand hostAddress;
+
+            // If address is mapped onto the function table, we can skip the table walk. Otherwise we fallback
+            // onto the dispatch stub.
+            if (guestAddress.Kind == OperandKind.Constant && context.FunctionTable.IsValid(guestAddress.Value))
+            {
+                Operand hostAddressAddr = !context.HasPtc ?
+                    Const(ref context.FunctionTable.GetValue(guestAddress.Value)) :
+                    Const(ref context.FunctionTable.GetValue(guestAddress.Value), new Symbol(SymbolType.FunctionTable, guestAddress.Value));
+
+                hostAddress = context.Load(OperandType.I64, hostAddressAddr);
+            }
+            else
+            {
+                hostAddress = !context.HasPtc ?
+                    Const((long)context.Stubs.DispatchStub) :
+                    Const((long)context.Stubs.DispatchStub, Ptc.DispatchStubSymbol);
+            }
+
+            if (isJump)
+            {
+                context.Tailcall(hostAddress, nativeContext);
+            }
+            else
+            {
+                OpCode op = context.CurrOp;
+
+                Operand returnAddress = context.Call(hostAddress, OperandType.I64, nativeContext);
+
+                context.LoadFromContext();
+
+                // Note: The return value of a translated function is always an Int64 with the address execution has
+                // returned to. We expect this address to be immediately after the current instruction, if it isn't we
+                // keep returning until we reach the dispatcher.
+                Operand nextAddr = Const((long)op.Address + op.OpCodeSizeInBytes);
+
+                // Try to continue within this block.
+                // If the return address isn't to our next instruction, we need to return so the JIT can figure out
+                // what to do.
+                Operand lblContinue = context.GetLabel(nextAddr.Value);
+                context.BranchIf(lblContinue, returnAddress, nextAddr, Comparison.Equal, BasicBlockFrequency.Cold);
+
+                context.Return(returnAddress);
+            }
         }
     }
 }

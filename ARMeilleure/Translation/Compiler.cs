@@ -1,47 +1,55 @@
 using ARMeilleure.CodeGen;
+using ARMeilleure.CodeGen.Optimizations;
 using ARMeilleure.CodeGen.X86;
 using ARMeilleure.Diagnostics;
 using ARMeilleure.IntermediateRepresentation;
-using System;
-using System.Runtime.InteropServices;
 
 namespace ARMeilleure.Translation
 {
     static class Compiler
     {
-        public static T Compile<T>(
+        public static CompiledFunction Compile(
             ControlFlowGraph cfg,
-            OperandType[]    funcArgTypes,
-            OperandType      funcReturnType,
+            OperandType[]    argTypes,
+            OperandType      retType,
             CompilerOptions  options)
         {
-            Logger.StartPass(PassName.Dominance);
+            CompilerContext cctx = new(cfg, argTypes, retType, options);
 
-            Dominance.FindDominators(cfg);
-            Dominance.FindDominanceFrontiers(cfg);
-
-            Logger.EndPass(PassName.Dominance);
-
-            Logger.StartPass(PassName.SsaConstruction);
-
-            if ((options & CompilerOptions.SsaForm) != 0)
+            if (options.HasFlag(CompilerOptions.Optimize))
             {
+                Logger.StartPass(PassName.TailMerge);
+
+                TailMerge.RunPass(cctx);
+
+                Logger.EndPass(PassName.TailMerge, cfg);
+            }
+
+            if (options.HasFlag(CompilerOptions.SsaForm))
+            {
+                Logger.StartPass(PassName.Dominance);
+
+                Dominance.FindDominators(cfg);
+                Dominance.FindDominanceFrontiers(cfg);
+
+                Logger.EndPass(PassName.Dominance);
+
+                Logger.StartPass(PassName.SsaConstruction);
+
                 Ssa.Construct(cfg);
+
+                Logger.EndPass(PassName.SsaConstruction, cfg);
             }
             else
             {
+                Logger.StartPass(PassName.RegisterToLocal);
+
                 RegisterToLocal.Rename(cfg);
+
+                Logger.EndPass(PassName.RegisterToLocal, cfg);
             }
 
-            Logger.EndPass(PassName.SsaConstruction, cfg);
-
-            CompilerContext cctx = new CompilerContext(cfg, funcArgTypes, funcReturnType, options);
-
-            CompiledFunction func = CodeGenerator.Generate(cctx);
-
-            IntPtr codePtr = JitCache.Map(func);
-
-            return Marshal.GetDelegateForFunctionPointer<T>(codePtr);
+            return CodeGenerator.Generate(cctx);
         }
     }
 }

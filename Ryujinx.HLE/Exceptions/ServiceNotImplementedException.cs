@@ -14,39 +14,34 @@ namespace Ryujinx.HLE.Exceptions
     [Serializable]
     internal class ServiceNotImplementedException : Exception
     {
+        public IpcService Service { get; }
         public ServiceCtx Context { get; }
         public IpcMessage Request { get; }
 
-        public ServiceNotImplementedException(ServiceCtx context)
-            : this(context, "The service call is not implemented.")
-        { }
+        public ServiceNotImplementedException(IpcService service, ServiceCtx context)
+            : this(service, context, "The service call is not implemented.") { }
 
-        public ServiceNotImplementedException(ServiceCtx context, string message)
-            : base(message)
+        public ServiceNotImplementedException(IpcService service, ServiceCtx context, string message) : base(message)
         {
+            Service = service;
             Context = context;
             Request = context.Request;
         }
 
-        public ServiceNotImplementedException(ServiceCtx context, string message, Exception inner)
-            : base(message, inner)
+        public ServiceNotImplementedException(IpcService service, ServiceCtx context, string message, Exception inner) : base(message, inner)
         {
+            Service = service;
             Context = context;
             Request = context.Request;
         }
 
-        protected ServiceNotImplementedException(SerializationInfo info, StreamingContext context) 
-            : base(info, context)
-        { }
+        protected ServiceNotImplementedException(SerializationInfo info, StreamingContext context) : base(info, context) { }
 
         public override string Message
         {
             get
             {
-                return base.Message +
-                        Environment.NewLine +
-                        Environment.NewLine +
-                        BuildMessage();
+                return base.Message + Environment.NewLine + Environment.NewLine + BuildMessage();
             }
         }
 
@@ -59,17 +54,17 @@ namespace Ryujinx.HLE.Exceptions
 
             if (callingType != null && callingMethod != null)
             {
-                var ipcService  = Context.Session.Service;
-                var ipcCommands = ipcService.Commands;
+                // If the type is past 0xF, we are using TIPC
+                var ipcCommands = Request.Type > IpcMessageType.TipcCloseSession ? Service.TipcCommands : Service.HipcCommands;
 
                 // Find the handler for the method called
-                var ipcHandler   = ipcCommands.FirstOrDefault(x => x.Value as MethodBase == callingMethod);
+                var ipcHandler   = ipcCommands.FirstOrDefault(x => x.Value == callingMethod);
                 var ipcCommandId = ipcHandler.Key;
                 var ipcMethod    = ipcHandler.Value;
 
                 if (ipcMethod != null)
                 {
-                    sb.AppendLine($"Service Command: {ipcService.GetType().FullName}: {ipcCommandId} ({ipcMethod.Name})");
+                    sb.AppendLine($"Service Command: {Service.GetType().FullName}: {ipcCommandId} ({ipcMethod.Name})");
                     sb.AppendLine();
                 }
             }
@@ -78,9 +73,9 @@ namespace Ryujinx.HLE.Exceptions
             sb.AppendLine(Context.Thread.GetGuestStackTrace());
 
             // Print buffer information
-            if (Request.PtrBuff.Count > 0 ||
-                Request.SendBuff.Count > 0 ||
-                Request.ReceiveBuff.Count > 0 ||
+            if (Request.PtrBuff.Count      > 0 ||
+                Request.SendBuff.Count     > 0 ||
+                Request.ReceiveBuff.Count  > 0 ||
                 Request.ExchangeBuff.Count > 0 ||
                 Request.RecvListBuff.Count > 0)
             {
@@ -145,18 +140,19 @@ namespace Ryujinx.HLE.Exceptions
             return sb.ToString();
         }
 
-        private (Type, MethodBase) WalkStackTrace(StackTrace trace)
+        private static (Type, MethodBase) WalkStackTrace(StackTrace trace)
         {
             int i = 0;
 
             StackFrame frame;
+
             // Find the IIpcService method that threw this exception
             while ((frame = trace.GetFrame(i++)) != null)
             {
                 var method   = frame.GetMethod();
                 var declType = method.DeclaringType;
 
-                if (typeof(IIpcService).IsAssignableFrom(declType))
+                if (typeof(IpcService).IsAssignableFrom(declType))
                 {
                     return (declType, method);
                 }

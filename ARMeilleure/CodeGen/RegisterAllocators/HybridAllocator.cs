@@ -1,18 +1,16 @@
-using ARMeilleure.Common;
 using ARMeilleure.IntermediateRepresentation;
 using ARMeilleure.Translation;
-using System.Collections.Generic;
+using System;
 using System.Diagnostics;
-
-using static ARMeilleure.IntermediateRepresentation.OperandHelper;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using static ARMeilleure.IntermediateRepresentation.Operand.Factory;
+using static ARMeilleure.IntermediateRepresentation.Operation.Factory;
 
 namespace ARMeilleure.CodeGen.RegisterAllocators
 {
     class HybridAllocator : IRegisterAllocator
     {
-        private const int RegistersCount = 16;
-        private const int MaxIROperands  = 4;
-
         private struct BlockInfo
         {
             public bool HasCall { get; }
@@ -28,19 +26,14 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
             }
         }
 
-        private class LocalInfo
+        private struct LocalInfo
         {
-            public int Uses     { get; set; }
-            public int UseCount { get; set; }
-
-            public bool PreAllocated { get; set; }
-            public int  Register     { get; set; }
-            public int  SpillOffset  { get; set; }
-
+            public int Uses { get; set; }
+            public int UsesAllocated { get; set; }
             public int Sequence { get; set; }
-
             public Operand Temp { get; set; }
-
+            public Operand Register { get; set; }
+            public Operand SpillOffset { get; set; }
             public OperandType Type { get; }
 
             private int _first;
@@ -48,13 +41,21 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
 
             public bool IsBlockLocal => _first == _last;
 
-            public LocalInfo(OperandType type, int uses)
+            public LocalInfo(OperandType type, int uses, int blkIndex)
             {
                 Uses = uses;
                 Type = type;
 
+                UsesAllocated = 0;
+                Sequence = 0;
+                Temp = default;
+                Register = default;
+                SpillOffset = default;
+
                 _first = -1;
                 _last  = -1;
+
+                SetBlockIndex(blkIndex);
             }
 
             public void SetBlockIndex(int blkIndex)
@@ -71,10 +72,39 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
             }
         }
 
-        public AllocationResult RunPass(
-            ControlFlowGraph cfg,
-            StackAllocator stackAlloc,
-            RegisterMasks regMasks)
+        private const int MaxIROperands = 4;
+        // The "visited" state is stored in the MSB of the local's value.
+        private const ulong VisitedMask = 1ul << 63;
+
+        private BlockInfo[] _blockInfo;
+        private LocalInfo[] _localInfo;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsVisited(Operand local)
+        {
+            Debug.Assert(local.Kind == OperandKind.LocalVariable);
+
+            return (local.GetValueUnsafe() & VisitedMask) != 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetVisited(Operand local)
+        {
+            Debug.Assert(local.Kind == OperandKind.LocalVariable);
+
+            local.GetValueUnsafe() |= VisitedMask;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ref LocalInfo GetLocalInfo(Operand local)
+        {
+            Debug.Assert(local.Kind == OperandKind.LocalVariable);
+            Debug.Assert(IsVisited(local), "Local variable not visited. Used before defined?");
+
+            return ref _localInfo[(uint)local.GetValueUnsafe() - 1];
+        }
+
+        public AllocationResult RunPass(ControlFlowGraph cfg, StackAllocator stackAlloc, RegisterMasks regMasks)
         {
             int intUsedRegisters = 0;
             int vecUsedRegisters = 0;
@@ -82,9 +112,10 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
             int intFreeRegisters = regMasks.IntAvailableRegisters;
             int vecFreeRegisters = regMasks.VecAvailableRegisters;
 
-            BlockInfo[] blockInfo = new BlockInfo[cfg.Blocks.Count];
+            _blockInfo = new BlockInfo[cfg.Blocks.Count];
+            _localInfo = new LocalInfo[cfg.Blocks.Count * 3];
 
-            List<LocalInfo> locInfo = new List<LocalInfo>();
+            int localInfoCount = 0;
 
             for (int index = cfg.PostOrderBlocks.Length - 1; index >= 0; index--)
             {
@@ -95,45 +126,55 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
 
                 bool hasCall = false;
 
-                foreach (Node node in block.Operations)
+                for (Operation node = block.Operations.First; node != default; node = node.ListNext)
                 {
-                    if (node is Operation operation && operation.Instruction == Instruction.Call)
+                    if (node.Instruction == Instruction.Call)
                     {
                         hasCall = true;
                     }
 
-                    for (int srcIndex = 0; srcIndex < node.SourcesCount; srcIndex++)
+                    foreach (Operand source in node.SourcesUnsafe)
                     {
-                        Operand source = node.GetSource(srcIndex);
-
                         if (source.Kind == OperandKind.LocalVariable)
                         {
-                            locInfo[source.AsInt32() - 1].SetBlockIndex(block.Index);
+                            GetLocalInfo(source).SetBlockIndex(block.Index);
+                        }
+                        else if (source.Kind == OperandKind.Memory)
+                        {
+                            MemoryOperand memOp = source.GetMemory();
+
+                            if (memOp.BaseAddress != default)
+                            {
+                                GetLocalInfo(memOp.BaseAddress).SetBlockIndex(block.Index);
+                            }
+
+                            if (memOp.Index != default)
+                            {
+                                GetLocalInfo(memOp.Index).SetBlockIndex(block.Index);
+                            }
                         }
                     }
 
-                    for (int dstIndex = 0; dstIndex < node.DestinationsCount; dstIndex++)
+                    foreach (Operand dest in node.DestinationsUnsafe)
                     {
-                        Operand dest = node.GetDestination(dstIndex);
-
                         if (dest.Kind == OperandKind.LocalVariable)
                         {
-                            LocalInfo info;
-
-                            if (dest.Value != 0)
+                            if (IsVisited(dest))
                             {
-                                info = locInfo[dest.AsInt32() - 1];
+                                GetLocalInfo(dest).SetBlockIndex(block.Index);
                             }
                             else
                             {
-                                dest.NumberLocal(locInfo.Count + 1);
+                                dest.NumberLocal(++localInfoCount);
 
-                                info = new LocalInfo(dest.Type, UsesCount(dest));
+                                if (localInfoCount > _localInfo.Length)
+                                {
+                                    Array.Resize(ref _localInfo, localInfoCount * 2);
+                                }
 
-                                locInfo.Add(info);
+                                SetVisited(dest);
+                                GetLocalInfo(dest) = new LocalInfo(dest.Type, UsesCount(dest), block.Index);
                             }
-
-                            info.SetBlockIndex(block.Index);
                         }
                         else if (dest.Kind == OperandKind.Register)
                         {
@@ -149,7 +190,7 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
                     }
                 }
 
-                blockInfo[block.Index] = new BlockInfo(hasCall, intFixedRegisters, vecFixedRegisters);
+                _blockInfo[block.Index] = new BlockInfo(hasCall, intFixedRegisters, vecFixedRegisters);
             }
 
             int sequence = 0;
@@ -158,7 +199,7 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
             {
                 BasicBlock block = cfg.PostOrderBlocks[index];
 
-                BlockInfo blkInfo = blockInfo[block.Index];
+                ref BlockInfo blkInfo = ref _blockInfo[block.Index];
 
                 int intLocalFreeRegisters = intFreeRegisters & ~blkInfo.IntFixedRegisters;
                 int vecLocalFreeRegisters = vecFreeRegisters & ~blkInfo.VecFixedRegisters;
@@ -176,81 +217,123 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
                 intLocalFreeRegisters &= ~(intSpillTempRegisters | intCallerSavedRegisters);
                 vecLocalFreeRegisters &= ~(vecSpillTempRegisters | vecCallerSavedRegisters);
 
-                for (LinkedListNode<Node> llNode = block.Operations.First; llNode != null; llNode = llNode.Next)
+                for (Operation node = block.Operations.First; node != default; node = node.ListNext)
                 {
-                    Node node = llNode.Value;
-
                     int intLocalUse = 0;
                     int vecLocalUse = 0;
 
-                    for (int srcIndex = 0; srcIndex < node.SourcesCount; srcIndex++)
+                    Operand AllocateRegister(Operand local)
                     {
-                        Operand source = node.GetSource(srcIndex);
+                        ref LocalInfo info = ref GetLocalInfo(local);
 
-                        if (source.Kind != OperandKind.LocalVariable)
+                        info.UsesAllocated++;
+
+                        Debug.Assert(info.UsesAllocated <= info.Uses);
+
+                        if (info.Register != default)
                         {
-                            continue;
-                        }
-
-                        LocalInfo info = locInfo[source.AsInt32() - 1];
-
-                        info.UseCount++;
-
-                        Debug.Assert(info.UseCount <= info.Uses);
-
-                        if (info.Register != -1)
-                        {
-                            node.SetSource(srcIndex, Register(info.Register, source.Type.ToRegisterType(), source.Type));
-
-                            if (info.UseCount == info.Uses && !info.PreAllocated)
+                            if (info.UsesAllocated == info.Uses)
                             {
-                                if (source.Type.IsInteger())
+                                Register reg = info.Register.GetRegister();
+
+                                if (local.Type.IsInteger())
                                 {
-                                    intLocalFreeRegisters |= 1 << info.Register;
+                                    intLocalFreeRegisters |= 1 << reg.Index;
                                 }
                                 else
                                 {
-                                    vecLocalFreeRegisters |= 1 << info.Register;
+                                    vecLocalFreeRegisters |= 1 << reg.Index;
                                 }
                             }
+
+                            return info.Register;
                         }
                         else
                         {
                             Operand temp = info.Temp;
 
-                            if (temp == null || info.Sequence != sequence)
+                            if (temp == default || info.Sequence != sequence)
                             {
-                                temp = source.Type.IsInteger()
-                                    ? GetSpillTemp(source, intSpillTempRegisters, ref intLocalUse)
-                                    : GetSpillTemp(source, vecSpillTempRegisters, ref vecLocalUse);
+                                temp = local.Type.IsInteger()
+                                    ? GetSpillTemp(local, intSpillTempRegisters, ref intLocalUse)
+                                    : GetSpillTemp(local, vecSpillTempRegisters, ref vecLocalUse);
 
                                 info.Sequence = sequence;
-                                info.Temp     = temp;
+                                info.Temp = temp;
                             }
 
-                            node.SetSource(srcIndex, temp);
+                            Operation fillOp = Operation(Instruction.Fill, temp, info.SpillOffset);
 
-                            Operation fillOp = new Operation(Instruction.Fill, temp, Const(info.SpillOffset));
+                            block.Operations.AddBefore(node, fillOp);
 
-                            block.Operations.AddBefore(llNode, fillOp);
+                            return temp;
+                        }
+                    }
+
+                    bool folded = false;
+
+                    // If operation is a copy of a local and that local is living on the stack, we turn the copy into
+                    // a fill, instead of inserting a fill before it.
+                    if (node.Instruction == Instruction.Copy)
+                    {
+                        Operand source = node.GetSource(0);
+
+                        if (source.Kind == OperandKind.LocalVariable)
+                        {
+                            ref LocalInfo info = ref GetLocalInfo(source);
+
+                            if (info.Register == default)
+                            {
+                                Operation fillOp = Operation(Instruction.Fill, node.Destination, info.SpillOffset);
+
+                                block.Operations.AddBefore(node, fillOp);
+                                block.Operations.Remove(node);
+
+                                node = fillOp;
+
+                                folded = true;
+                            }
+                        }
+                    }
+
+                    if (!folded)
+                    {
+                        foreach (ref Operand source in node.SourcesUnsafe)
+                        {
+                            if (source.Kind == OperandKind.LocalVariable)
+                            {
+                                source = AllocateRegister(source);
+                            }
+                            else if (source.Kind == OperandKind.Memory)
+                            {
+                                MemoryOperand memOp = source.GetMemory();
+
+                                if (memOp.BaseAddress != default)
+                                {
+                                    memOp.BaseAddress = AllocateRegister(memOp.BaseAddress);
+                                }
+
+                                if (memOp.Index != default)
+                                {
+                                    memOp.Index = AllocateRegister(memOp.Index);
+                                }
+                            }
                         }
                     }
 
                     int intLocalAsg = 0;
                     int vecLocalAsg = 0;
 
-                    for (int dstIndex = 0; dstIndex < node.DestinationsCount; dstIndex++)
+                    foreach (ref Operand dest in node.DestinationsUnsafe)
                     {
-                        Operand dest = node.GetDestination(dstIndex);
-
                         if (dest.Kind != OperandKind.LocalVariable)
                         {
                             continue;
                         }
 
-                        LocalInfo info = locInfo[dest.AsInt32() - 1];
+                        ref LocalInfo info = ref GetLocalInfo(dest);
 
-                        if (info.UseCount == 0 && !info.PreAllocated)
+                        if (info.UsesAllocated == 0)
                         {
                             int mask = dest.Type.IsInteger()
                                 ? intLocalFreeRegisters
@@ -258,9 +341,9 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
 
                             if (info.IsBlockLocal && mask != 0)
                             {
-                                int selectedReg = BitUtils.LowestBitSet(mask);
+                                int selectedReg = BitOperations.TrailingZeroCount(mask);
 
-                                info.Register = selectedReg;
+                                info.Register = Register(selectedReg, info.Type.ToRegisterType(), info.Type);
 
                                 if (dest.Type.IsInteger())
                                 {
@@ -275,24 +358,24 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
                             }
                             else
                             {
-                                info.Register    = -1;
-                                info.SpillOffset = stackAlloc.Allocate(dest.Type.GetSizeInBytes());
+                                info.Register    = default;
+                                info.SpillOffset = Const(stackAlloc.Allocate(dest.Type.GetSizeInBytes()));
                             }
                         }
 
-                        info.UseCount++;
+                        info.UsesAllocated++;
 
-                        Debug.Assert(info.UseCount <= info.Uses);
+                        Debug.Assert(info.UsesAllocated <= info.Uses);
 
-                        if (info.Register != -1)
+                        if (info.Register != default)
                         {
-                            node.SetDestination(dstIndex, Register(info.Register, dest.Type.ToRegisterType(), dest.Type));
+                            dest = info.Register;
                         }
                         else
                         {
                             Operand temp = info.Temp;
 
-                            if (temp == null || info.Sequence != sequence)
+                            if (temp == default || info.Sequence != sequence)
                             {
                                 temp = dest.Type.IsInteger()
                                     ? GetSpillTemp(dest, intSpillTempRegisters, ref intLocalAsg)
@@ -302,11 +385,13 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
                                 info.Temp     = temp;
                             }
 
-                            node.SetDestination(dstIndex, temp);
+                            dest = temp;
 
-                            Operation spillOp = new Operation(Instruction.Spill, null, Const(info.SpillOffset), temp);
+                            Operation spillOp = Operation(Instruction.Spill, default, info.SpillOffset, temp);
 
-                            llNode = block.Operations.AddAfter(llNode, spillOp);
+                            block.Operations.AddAfter(node, spillOp);
+
+                            node = spillOp;
                         }
                     }
 
@@ -354,7 +439,7 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
 
         private static Operand GetSpillTemp(Operand local, int freeMask, ref int useMask)
         {
-            int selectedReg = BitUtils.LowestBitSet(freeMask & ~useMask);
+            int selectedReg = BitOperations.TrailingZeroCount(freeMask & ~useMask);
 
             useMask |= 1 << selectedReg;
 
@@ -363,20 +448,7 @@ namespace ARMeilleure.CodeGen.RegisterAllocators
 
         private static int UsesCount(Operand local)
         {
-            return local.Assignments.Count + local.Uses.Count;
-        }
-
-        private static IEnumerable<BasicBlock> Successors(BasicBlock block)
-        {
-            if (block.Next != null)
-            {
-                yield return block.Next;
-            }
-
-            if (block.Branch != null)
-            {
-                yield return block.Branch;
-            }
+            return local.AssignmentsCount + local.UsesCount;
         }
     }
 }

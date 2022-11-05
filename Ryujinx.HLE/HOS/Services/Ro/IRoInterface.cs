@@ -1,11 +1,11 @@
-﻿using ARMeilleure.Memory;
+﻿using LibHac.Tools.FsSystem;
 using Ryujinx.Common;
-using Ryujinx.Common.Logging;
+using Ryujinx.Cpu;
 using Ryujinx.HLE.HOS.Kernel.Common;
 using Ryujinx.HLE.HOS.Kernel.Memory;
 using Ryujinx.HLE.HOS.Kernel.Process;
 using Ryujinx.HLE.Loaders.Executables;
-using Ryujinx.HLE.Utilities;
+using Ryujinx.Memory;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -16,7 +16,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 {
     [Service("ldr:ro")]
     [Service("ro:1")] // 7.0.0+
-    class IRoInterface : IpcService, IDisposable
+    class IRoInterface : DisposableIpcService
     {
         private const int MaxNrr         = 0x40;
         private const int MaxNro         = 0x40;
@@ -30,6 +30,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
         private List<NroInfo> _nroInfos;
 
         private KProcess _owner;
+        private IVirtualMemoryManager _ownerMm;
 
         private static Random _random = new Random();
 
@@ -38,9 +39,10 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             _nrrInfos = new List<NrrInfo>(MaxNrr);
             _nroInfos = new List<NroInfo>(MaxNro);
             _owner    = null;
+            _ownerMm  = null;
         }
 
-        private ResultCode ParseNrr(out NrrInfo nrrInfo, ServiceCtx context, long nrrAddress, long nrrSize)
+        private ResultCode ParseNrr(out NrrInfo nrrInfo, ServiceCtx context, ulong nrrAddress, ulong nrrSize)
         {
             nrrInfo = null;
 
@@ -53,23 +55,26 @@ namespace Ryujinx.HLE.HOS.Services.Ro
                 return ResultCode.InvalidAddress;
             }
 
-            StructReader reader = new StructReader(context.Memory, nrrAddress);
-            NrrHeader    header = reader.Read<NrrHeader>();
+            NrrHeader header = _owner.CpuMemory.Read<NrrHeader>(nrrAddress);
 
             if (header.Magic != NrrMagic)
             {
                 return ResultCode.InvalidNrr;
             }
-            else if (header.NrrSize != nrrSize)
+            else if (header.Size != nrrSize)
             {
                 return ResultCode.InvalidSize;
             }
 
             List<byte[]> hashes = new List<byte[]>();
 
-            for (int i = 0; i < header.HashCount; i++)
+            for (int i = 0; i < header.HashesCount; i++)
             {
-                hashes.Add(context.Memory.ReadBytes(nrrAddress + header.HashOffset + (i * 0x20), 0x20));
+                byte[] hash = new byte[0x20];
+
+                _owner.CpuMemory.Read(nrrAddress + header.HashesOffset + (uint)(i * 0x20), hash);
+
+                hashes.Add(hash);
             }
 
             nrrInfo = new NrrInfo(nrrAddress, header, hashes);
@@ -127,15 +132,18 @@ namespace Ryujinx.HLE.HOS.Services.Ro
                 return ResultCode.InvalidAddress;
             }
 
-            uint magic       = context.Memory.ReadUInt32((long)nroAddress + 0x10);
-            uint nroFileSize = context.Memory.ReadUInt32((long)nroAddress + 0x18);
+            uint magic       = _owner.CpuMemory.Read<uint>(nroAddress + 0x10);
+            uint nroFileSize = _owner.CpuMemory.Read<uint>(nroAddress + 0x18);
 
             if (magic != NroMagic || nroSize != nroFileSize)
             {
                 return ResultCode.InvalidNro;
             }
 
-            byte[] nroData = context.Memory.ReadBytes((long)nroAddress, (long)nroSize);
+            byte[] nroData = new byte[nroSize];
+
+            _owner.CpuMemory.Read(nroAddress, nroData);
+
             byte[] nroHash = null;
 
             MemoryStream stream = new MemoryStream(nroData);
@@ -157,33 +165,36 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 
             stream.Position = 0;
 
-            NxRelocatableObject executable = new NxRelocatableObject(stream, nroAddress, bssAddress);
+            NroExecutable nro = new NroExecutable(stream.AsStorage(), nroAddress, bssAddress);
 
-            // check if everything is page align.
-            if ((executable.Text.Length & 0xFFF) != 0 || (executable.Ro.Length & 0xFFF) != 0 ||
-                (executable.Data.Length & 0xFFF) != 0 || (executable.BssSize & 0xFFF)   != 0)
+            // Check if everything is page align.
+            if ((nro.Text.Length & 0xFFF) != 0 || (nro.Ro.Length & 0xFFF) != 0 ||
+                (nro.Data.Length & 0xFFF) != 0 || (nro.BssSize & 0xFFF)   != 0)
             {
                 return ResultCode.InvalidNro;
             }
 
-            // check if everything is contiguous.
-            if (executable.RoOffset   != executable.TextOffset + executable.Text.Length ||
-                executable.DataOffset != executable.RoOffset   + executable.Ro.Length   ||
-                nroFileSize           != executable.DataOffset + executable.Data.Length)
+            // Check if everything is contiguous.
+            if (nro.RoOffset   != nro.TextOffset + nro.Text.Length ||
+                nro.DataOffset != nro.RoOffset   + nro.Ro.Length   ||
+                nroFileSize    != nro.DataOffset + nro.Data.Length)
             {
                 return ResultCode.InvalidNro;
             }
 
-            // finally check the bss size match.
-            if ((ulong)executable.BssSize != bssSize)
+            // Check the bss size match.
+            if ((ulong)nro.BssSize != bssSize)
             {
                 return ResultCode.InvalidNro;
             }
 
-            int totalSize = executable.Text.Length + executable.Ro.Length + executable.Data.Length + executable.BssSize;
+            uint totalSize = (uint)nro.Text.Length + (uint)nro.Ro.Length + (uint)nro.Data.Length + nro.BssSize;
+
+            // Apply patches
+            context.Device.FileSystem.ModLoader.ApplyNroPatches(nro);
 
             res = new NroInfo(
-                executable,
+                nro,
                 nroHash,
                 nroAddress,
                 nroSize,
@@ -196,7 +207,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 
         private ResultCode MapNro(KProcess process, NroInfo info, out ulong nroMappedAddress)
         {
-            KMemoryManager memMgr = process.MemoryManager;
+            KPageTableBase memMgr = process.MemoryManager;
 
             int retryCount = 0;
 
@@ -242,7 +253,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 
         private bool CanAddGuardRegionsInProcess(KProcess process, ulong baseAddress, ulong size)
         {
-            KMemoryManager memMgr = process.MemoryManager;
+            KPageTableBase memMgr = process.MemoryManager;
 
             KMemoryInfo memInfo = memMgr.QueryMemory(baseAddress - 1);
 
@@ -260,7 +271,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 
         private ResultCode MapCodeMemoryInProcess(KProcess process, ulong baseAddress, ulong size, out ulong targetAddress)
         {
-            KMemoryManager memMgr = process.MemoryManager;
+            KPageTableBase memMgr = process.MemoryManager;
 
             targetAddress = 0;
 
@@ -317,34 +328,34 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 
             ulong bssStart = dataStart + (ulong)relocatableObject.Data.Length;
 
-            ulong bssEnd = BitUtils.AlignUp(bssStart + (ulong)relocatableObject.BssSize, KMemoryManager.PageSize);
+            ulong bssEnd = BitUtils.AlignUp(bssStart + (ulong)relocatableObject.BssSize, KPageTableBase.PageSize);
 
-            process.CpuMemory.WriteBytes((long)textStart, relocatableObject.Text);
-            process.CpuMemory.WriteBytes((long)roStart,   relocatableObject.Ro);
-            process.CpuMemory.WriteBytes((long)dataStart, relocatableObject.Data);
+            process.CpuMemory.Write(textStart, relocatableObject.Text);
+            process.CpuMemory.Write(roStart,   relocatableObject.Ro);
+            process.CpuMemory.Write(dataStart, relocatableObject.Data);
 
-            MemoryHelper.FillWithZeros(process.CpuMemory, (long)bssStart, (int)(bssEnd - bssStart));
+            MemoryHelper.FillWithZeros(process.CpuMemory, bssStart, (int)(bssEnd - bssStart));
 
             KernelResult result;
 
-            result = process.MemoryManager.SetProcessMemoryPermission(textStart, roStart - textStart, MemoryPermission.ReadAndExecute);
+            result = process.MemoryManager.SetProcessMemoryPermission(textStart, roStart - textStart, KMemoryPermission.ReadAndExecute);
 
             if (result != KernelResult.Success)
             {
                 return result;
             }
 
-            result = process.MemoryManager.SetProcessMemoryPermission(roStart, dataStart - roStart, MemoryPermission.Read);
+            result = process.MemoryManager.SetProcessMemoryPermission(roStart, dataStart - roStart, KMemoryPermission.Read);
 
             if (result != KernelResult.Success)
             {
                 return result;
             }
 
-            return process.MemoryManager.SetProcessMemoryPermission(dataStart, bssEnd - dataStart, MemoryPermission.ReadAndWrite);
+            return process.MemoryManager.SetProcessMemoryPermission(dataStart, bssEnd - dataStart, KMemoryPermission.ReadAndWrite);
         }
 
-        private ResultCode RemoveNrrInfo(long nrrAddress)
+        private ResultCode RemoveNrrInfo(ulong nrrAddress)
         {
             foreach (NrrInfo info in _nrrInfos)
             {
@@ -410,9 +421,9 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             return (ResultCode)result;
         }
 
-        private ResultCode IsInitialized(KProcess process)
+        private ResultCode IsInitialized(ulong pid)
         {
-            if (_owner != null && _owner.Pid == process.Pid)
+            if (_owner != null && _owner.Pid == pid)
             {
                 return ResultCode.Success;
             }
@@ -420,11 +431,11 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             return ResultCode.InvalidProcess;
         }
 
-        [Command(0)]
+        [CommandHipc(0)]
         // LoadNro(u64, u64, u64, u64, u64, pid) -> u64
         public ResultCode LoadNro(ServiceCtx context)
         {
-            ResultCode result = IsInitialized(context.Process);
+            ResultCode result = IsInitialized(_owner.Pid);
 
             // Zero
             context.RequestData.ReadUInt64();
@@ -444,11 +455,11 @@ namespace Ryujinx.HLE.HOS.Services.Ro
 
                 if (result == ResultCode.Success)
                 {
-                    result = MapNro(context.Process, info, out nroMappedAddress);
+                    result = MapNro(_owner, info, out nroMappedAddress);
 
                     if (result == ResultCode.Success)
                     {
-                        result = (ResultCode)SetNroMemoryPermissions(context.Process, info.Executable, nroMappedAddress);
+                        result = (ResultCode)SetNroMemoryPermissions(_owner, info.Executable, nroMappedAddress);
 
                         if (result == ResultCode.Success)
                         {
@@ -465,11 +476,11 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             return result;
         }
 
-        [Command(1)]
+        [CommandHipc(1)]
         // UnloadNro(u64, u64, pid)
         public ResultCode UnloadNro(ServiceCtx context)
         {
-            ResultCode result = IsInitialized(context.Process);
+            ResultCode result = IsInitialized(_owner.Pid);
 
             // Zero
             context.RequestData.ReadUInt64();
@@ -489,17 +500,17 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             return result;
         }
 
-        [Command(2)]
+        [CommandHipc(2)]
         // LoadNrr(u64, u64, u64, pid)
         public ResultCode LoadNrr(ServiceCtx context)
         {
-            ResultCode result = IsInitialized(context.Process);
+            ResultCode result = IsInitialized(_owner.Pid);
 
             // pid placeholder, zero
             context.RequestData.ReadUInt64();
 
-            long nrrAddress = context.RequestData.ReadInt64();
-            long nrrSize    = context.RequestData.ReadInt64();
+            ulong nrrAddress = context.RequestData.ReadUInt64();
+            ulong nrrSize    = context.RequestData.ReadUInt64();
 
             if (result == ResultCode.Success)
             {
@@ -522,16 +533,16 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             return result;
         }
 
-        [Command(3)]
+        [CommandHipc(3)]
         // UnloadNrr(u64, u64, pid)
         public ResultCode UnloadNrr(ServiceCtx context)
         {
-            ResultCode result = IsInitialized(context.Process);
+            ResultCode result = IsInitialized(_owner.Pid);
 
             // pid placeholder, zero
             context.RequestData.ReadUInt64();
 
-            long nrrHeapAddress = context.RequestData.ReadInt64();
+            ulong nrrHeapAddress = context.RequestData.ReadUInt64();
 
             if (result == ResultCode.Success)
             {
@@ -546,7 +557,7 @@ namespace Ryujinx.HLE.HOS.Services.Ro
             return result;
         }
 
-        [Command(4)]
+        [CommandHipc(4)]
         // Initialize(u64, pid, KObject)
         public ResultCode Initialize(ServiceCtx context)
         {
@@ -555,19 +566,44 @@ namespace Ryujinx.HLE.HOS.Services.Ro
                 return ResultCode.InvalidSession;
             }
 
-            _owner = context.Process;
+            int processHandle = context.Request.HandleDesc.ToCopy[0];
+            _owner = context.Process.HandleTable.GetKProcess(processHandle);
+            _ownerMm = _owner?.CpuMemory;
+            context.Device.System.KernelContext.Syscall.CloseHandle(processHandle);
+
+            if (_ownerMm is IRefCounted rc)
+            {
+                rc.IncrementReferenceCount();
+            }
 
             return ResultCode.Success;
         }
 
-        public void Dispose()
+        [CommandHipc(10)]
+        // LoadNrr2(u64, u64, u64, pid)
+        public ResultCode LoadNrr2(ServiceCtx context)
         {
-            foreach (NroInfo info in _nroInfos)
-            {
-                UnmapNroFromInfo(info);
-            }
+            context.Device.System.KernelContext.Syscall.CloseHandle(context.Request.HandleDesc.ToCopy[0]);
 
-            _nroInfos.Clear();
+            return LoadNrr(context);
+        }
+
+        protected override void Dispose(bool isDisposing)
+        {
+            if (isDisposing)
+            {
+                foreach (NroInfo info in _nroInfos)
+                {
+                    UnmapNroFromInfo(info);
+                }
+
+                _nroInfos.Clear();
+
+                if (_ownerMm is IRefCounted rc)
+                {
+                    rc.DecrementReferenceCount();
+                }
+            }
         }
     }
 }

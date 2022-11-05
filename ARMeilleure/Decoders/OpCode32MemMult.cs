@@ -1,14 +1,18 @@
+using System.Numerics;
+
 namespace ARMeilleure.Decoders
 {
     class OpCode32MemMult : OpCode32, IOpCode32MemMult
     {
-        public int Rn { get; private set; }
+        public int Rn { get; }
 
-        public int RegisterMask { get; private set; }
-        public int Offset       { get; private set; }
-        public int PostOffset   { get; private set; }
+        public int RegisterMask { get; }
+        public int Offset       { get; }
+        public int PostOffset   { get; }
 
-        public bool IsLoad { get; private set; }
+        public bool IsLoad { get; }
+
+        public new static OpCode Create(InstDescriptor inst, ulong address, int opCode) => new OpCode32MemMult(inst, address, opCode);
 
         public OpCode32MemMult(InstDescriptor inst, ulong address, int opCode) : base(inst, address, opCode)
         {
@@ -21,14 +25,7 @@ namespace ARMeilleure.Decoders
 
             RegisterMask = opCode & 0xffff;
 
-            int regsSize = 0;
-
-            for (int index = 0; index < 16; index++)
-            {
-                regsSize += (RegisterMask >> index) & 1;
-            }
-
-            regsSize *= 4;
+            int regsSize = BitOperations.PopCount((uint)RegisterMask) * 4;
 
             if (!u)
             {

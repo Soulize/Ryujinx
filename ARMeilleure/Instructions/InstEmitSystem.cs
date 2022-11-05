@@ -3,20 +3,17 @@ using ARMeilleure.IntermediateRepresentation;
 using ARMeilleure.State;
 using ARMeilleure.Translation;
 using System;
+using System.Reflection;
 
 using static ARMeilleure.Instructions.InstEmitHelper;
-using static ARMeilleure.IntermediateRepresentation.OperandHelper;
+using static ARMeilleure.IntermediateRepresentation.Operand.Factory;
 
 namespace ARMeilleure.Instructions
 {
     static partial class InstEmit
     {
-        private const int DczSizeLog2 = 4;
-
-        public static void Hint(ArmEmitterContext context)
-        {
-            // Execute as no-op.
-        }
+        private const int DczSizeLog2 = 4; // Log2 size in words
+        public const int DczSizeInBytes = 4 << DczSizeLog2;
 
         public static void Isb(ArmEmitterContext context)
         {
@@ -27,43 +24,44 @@ namespace ARMeilleure.Instructions
         {
             OpCodeSystem op = (OpCodeSystem)context.CurrOp;
 
-            Delegate dlg;
+            MethodInfo info;
 
             switch (GetPackedId(op))
             {
-                case 0b11_011_0000_0000_001: dlg = new _U64(NativeInterface.GetCtrEl0);    break;
-                case 0b11_011_0000_0000_111: dlg = new _U64(NativeInterface.GetDczidEl0);  break;
-                case 0b11_011_0100_0010_000: EmitGetNzcv(context);                         return;
-                case 0b11_011_0100_0100_000: dlg = new _U64(NativeInterface.GetFpcr);      break;
-                case 0b11_011_0100_0100_001: dlg = new _U64(NativeInterface.GetFpsr);      break;
-                case 0b11_011_1101_0000_010: dlg = new _U64(NativeInterface.GetTpidrEl0);  break;
-                case 0b11_011_1101_0000_011: dlg = new _U64(NativeInterface.GetTpidr);     break;
-                case 0b11_011_1110_0000_000: dlg = new _U64(NativeInterface.GetCntfrqEl0); break;
-                case 0b11_011_1110_0000_001: dlg = new _U64(NativeInterface.GetCntpctEl0); break;
+                case 0b11_011_0000_0000_001: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetCtrEl0)); break;
+                case 0b11_011_0000_0000_111: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetDczidEl0)); break;
+                case 0b11_011_0100_0010_000: EmitGetNzcv(context); return;
+                case 0b11_011_0100_0100_000: EmitGetFpcr(context); return;
+                case 0b11_011_0100_0100_001: EmitGetFpsr(context); return;
+                case 0b11_011_1101_0000_010: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetTpidrEl0)); break;
+                case 0b11_011_1101_0000_011: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetTpidrroEl0)); break;
+                case 0b11_011_1110_0000_000: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetCntfrqEl0)); break;
+                case 0b11_011_1110_0000_001: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetCntpctEl0)); break;
+                case 0b11_011_1110_0000_010: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.GetCntvctEl0)); break;
 
                 default: throw new NotImplementedException($"Unknown MRS 0x{op.RawOpCode:X8} at 0x{op.Address:X16}.");
             }
 
-            SetIntOrZR(context, op.Rt, context.Call(dlg));
+            SetIntOrZR(context, op.Rt, context.Call(info));
         }
 
         public static void Msr(ArmEmitterContext context)
         {
             OpCodeSystem op = (OpCodeSystem)context.CurrOp;
 
-            Delegate dlg;
+            MethodInfo info;
 
             switch (GetPackedId(op))
             {
-                case 0b11_011_0100_0010_000: EmitSetNzcv(context);                             return;
-                case 0b11_011_0100_0100_000: dlg = new _Void_U64(NativeInterface.SetFpcr);     break;
-                case 0b11_011_0100_0100_001: dlg = new _Void_U64(NativeInterface.SetFpsr);     break;
-                case 0b11_011_1101_0000_010: dlg = new _Void_U64(NativeInterface.SetTpidrEl0); break;
+                case 0b11_011_0100_0010_000: EmitSetNzcv(context); return;
+                case 0b11_011_0100_0100_000: EmitSetFpcr(context); return;
+                case 0b11_011_0100_0100_001: EmitSetFpsr(context); return;
+                case 0b11_011_1101_0000_010: info = typeof(NativeInterface).GetMethod(nameof(NativeInterface.SetTpidrEl0)); break;
 
                 default: throw new NotImplementedException($"Unknown MSR 0x{op.RawOpCode:X8} at 0x{op.Address:X16}.");
             }
 
-            context.Call(dlg, GetIntOrZR(context, op.Rt));
+            context.Call(info, GetIntOrZR(context, op.Rt));
         }
 
         public static void Nop(ArmEmitterContext context)
@@ -85,18 +83,23 @@ namespace ARMeilleure.Instructions
                     // DC ZVA
                     Operand t = GetIntOrZR(context, op.Rt);
 
-                    for (long offset = 0; offset < (4 << DczSizeLog2); offset += 8)
+                    for (long offset = 0; offset < DczSizeInBytes; offset += 8)
                     {
                         Operand address = context.Add(t, Const(offset));
 
-                        context.Call(new _Void_U64_U64(NativeInterface.WriteUInt64), address, Const(0L));
+                        InstEmitMemoryHelper.EmitStore(context, address, RegisterConsts.ZeroIndex, 3);
                     }
 
                     break;
                 }
 
                 // No-op
-                case 0b11_011_0111_1110_001: //DC CIVAC
+                case 0b11_011_0111_1110_001: // DC CIVAC
+                    break;
+
+                case 0b11_011_0111_0101_001: // IC IVAU
+                    Operand target = Register(op.Rt, RegisterType.Integer, OperandType.I64);
+                    context.Call(typeof(NativeInterface).GetMethod(nameof(NativeInterface.InvalidateCacheLine)), target);
                     break;
             }
         }
@@ -118,39 +121,91 @@ namespace ARMeilleure.Instructions
         {
             OpCodeSystem op = (OpCodeSystem)context.CurrOp;
 
-            Operand vSh = context.ShiftLeft(GetFlag(PState.VFlag), Const((int)PState.VFlag));
-            Operand cSh = context.ShiftLeft(GetFlag(PState.CFlag), Const((int)PState.CFlag));
-            Operand zSh = context.ShiftLeft(GetFlag(PState.ZFlag), Const((int)PState.ZFlag));
-            Operand nSh = context.ShiftLeft(GetFlag(PState.NFlag), Const((int)PState.NFlag));
+            Operand nzcv = context.ShiftLeft(GetFlag(PState.VFlag), Const((int)PState.VFlag));
+            nzcv = context.BitwiseOr(nzcv, context.ShiftLeft(GetFlag(PState.CFlag), Const((int)PState.CFlag)));
+            nzcv = context.BitwiseOr(nzcv, context.ShiftLeft(GetFlag(PState.ZFlag), Const((int)PState.ZFlag)));
+            nzcv = context.BitwiseOr(nzcv, context.ShiftLeft(GetFlag(PState.NFlag), Const((int)PState.NFlag)));
 
-            Operand nzcvSh = context.BitwiseOr(context.BitwiseOr(nSh, zSh), context.BitwiseOr(cSh, vSh));
+            SetIntOrZR(context, op.Rt, nzcv);
+        }
 
-            SetIntOrZR(context, op.Rt, nzcvSh);
+        private static void EmitGetFpcr(ArmEmitterContext context)
+        {
+            OpCodeSystem op = (OpCodeSystem)context.CurrOp;
+
+            Operand fpcr = Const(0);
+
+            for (int flag = 0; flag < RegisterConsts.FpFlagsCount; flag++)
+            {
+                if (FPCR.Mask.HasFlag((FPCR)(1u << flag)))
+                {
+                    fpcr = context.BitwiseOr(fpcr, context.ShiftLeft(GetFpFlag((FPState)flag), Const(flag)));
+                }
+            }
+
+            SetIntOrZR(context, op.Rt, fpcr);
+        }
+
+        private static void EmitGetFpsr(ArmEmitterContext context)
+        {
+            OpCodeSystem op = (OpCodeSystem)context.CurrOp;
+
+            Operand fpsr = Const(0);
+
+            for (int flag = 0; flag < RegisterConsts.FpFlagsCount; flag++)
+            {
+                if (FPSR.Mask.HasFlag((FPSR)(1u << flag)))
+                {
+                    fpsr = context.BitwiseOr(fpsr, context.ShiftLeft(GetFpFlag((FPState)flag), Const(flag)));
+                }
+            }
+
+            SetIntOrZR(context, op.Rt, fpsr);
         }
 
         private static void EmitSetNzcv(ArmEmitterContext context)
         {
             OpCodeSystem op = (OpCodeSystem)context.CurrOp;
 
-            Operand t = GetIntOrZR(context, op.Rt);
-                    t = context.ConvertI64ToI32(t);
+            Operand nzcv = GetIntOrZR(context, op.Rt);
+                    nzcv = context.ConvertI64ToI32(nzcv);
 
-            Operand v = context.ShiftRightUI(t, Const((int)PState.VFlag));
-                    v = context.BitwiseAnd  (v, Const(1));
+            SetFlag(context, PState.VFlag, context.BitwiseAnd(context.ShiftRightUI(nzcv, Const((int)PState.VFlag)), Const(1)));
+            SetFlag(context, PState.CFlag, context.BitwiseAnd(context.ShiftRightUI(nzcv, Const((int)PState.CFlag)), Const(1)));
+            SetFlag(context, PState.ZFlag, context.BitwiseAnd(context.ShiftRightUI(nzcv, Const((int)PState.ZFlag)), Const(1)));
+            SetFlag(context, PState.NFlag, context.BitwiseAnd(context.ShiftRightUI(nzcv, Const((int)PState.NFlag)), Const(1)));
+        }
 
-            Operand c = context.ShiftRightUI(t, Const((int)PState.CFlag));
-                    c = context.BitwiseAnd  (c, Const(1));
+        private static void EmitSetFpcr(ArmEmitterContext context)
+        {
+            OpCodeSystem op = (OpCodeSystem)context.CurrOp;
 
-            Operand z = context.ShiftRightUI(t, Const((int)PState.ZFlag));
-                    z = context.BitwiseAnd  (z, Const(1));
+            Operand fpcr = GetIntOrZR(context, op.Rt);
+                    fpcr = context.ConvertI64ToI32(fpcr);
 
-            Operand n = context.ShiftRightUI(t, Const((int)PState.NFlag));
-                    n = context.BitwiseAnd  (n, Const(1));
+            for (int flag = 0; flag < RegisterConsts.FpFlagsCount; flag++)
+            {
+                if (FPCR.Mask.HasFlag((FPCR)(1u << flag)))
+                {
+                    SetFpFlag(context, (FPState)flag, context.BitwiseAnd(context.ShiftRightUI(fpcr, Const(flag)), Const(1)));
+                }
+            }
+        }
 
-            SetFlag(context, PState.VFlag, v);
-            SetFlag(context, PState.CFlag, c);
-            SetFlag(context, PState.ZFlag, z);
-            SetFlag(context, PState.NFlag, n);
+        private static void EmitSetFpsr(ArmEmitterContext context)
+        {
+            OpCodeSystem op = (OpCodeSystem)context.CurrOp;
+
+            Operand fpsr = GetIntOrZR(context, op.Rt);
+                    fpsr = context.ConvertI64ToI32(fpsr);
+
+            for (int flag = 0; flag < RegisterConsts.FpFlagsCount; flag++)
+            {
+                if (FPSR.Mask.HasFlag((FPSR)(1u << flag)))
+                {
+                    SetFpFlag(context, (FPState)flag, context.BitwiseAnd(context.ShiftRightUI(fpsr, Const(flag)), Const(1)));
+                }
+            }
         }
     }
 }

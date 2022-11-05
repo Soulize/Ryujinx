@@ -1,15 +1,36 @@
-using ARMeilleure.Memory;
+using ARMeilleure.Translation.PTC;
+using LibHac.Loader;
+using LibHac.Ncm;
+using LibHac.Util;
 using Ryujinx.Common;
 using Ryujinx.Common.Logging;
+using Ryujinx.HLE.HOS.Kernel;
 using Ryujinx.HLE.HOS.Kernel.Common;
 using Ryujinx.HLE.HOS.Kernel.Memory;
 using Ryujinx.HLE.HOS.Kernel.Process;
 using Ryujinx.HLE.Loaders.Executables;
-using Ryujinx.HLE.Loaders.Npdm;
+using System;
+using System.Linq;
+using System.Runtime.InteropServices;
+using Npdm = LibHac.Loader.Npdm;
 
 namespace Ryujinx.HLE.HOS
 {
-    class ProgramLoader
+    struct ProgramInfo
+    {
+        public string Name;
+        public ulong ProgramId;
+        public bool AllowCodeMemoryForJit;
+
+        public ProgramInfo(in Npdm npdm, bool allowCodeMemoryForJit)
+        {
+            Name = StringUtils.Utf8ZToString(npdm.Meta.Value.ProgramName);
+            ProgramId = npdm.Aci.Value.ProgramId.Value;
+            AllowCodeMemoryForJit = allowCodeMemoryForJit;
+        }
+    }
+
+    static class ProgramLoader
     {
         private const bool AslrEnabled = true;
 
@@ -17,79 +38,82 @@ namespace Ryujinx.HLE.HOS
         private const int ArgsDataSize   = 0x9000;
         private const int ArgsTotalSize  = ArgsHeaderSize + ArgsDataSize;
 
-        public static bool LoadKernelInitalProcess(Horizon system, KernelInitialProcess kip)
+        public static bool LoadKip(KernelContext context, KipExecutable kip)
         {
-            int endOffset = kip.DataOffset + kip.Data.Length;
+            uint endOffset = kip.DataOffset + (uint)kip.Data.Length;
 
             if (kip.BssSize != 0)
             {
                 endOffset = kip.BssOffset + kip.BssSize;
             }
 
-            int codeSize = BitUtils.AlignUp(kip.TextOffset + endOffset, KMemoryManager.PageSize);
+            uint codeSize = BitUtils.AlignUp(kip.TextOffset + endOffset, KPageTableBase.PageSize);
 
-            int codePagesCount = codeSize / KMemoryManager.PageSize;
+            int codePagesCount = (int)(codeSize / KPageTableBase.PageSize);
 
-            ulong codeBaseAddress = kip.Addr39Bits ? 0x8000000UL : 0x200000UL;
+            ulong codeBaseAddress = kip.Is64BitAddressSpace ? 0x8000000UL : 0x200000UL;
 
             ulong codeAddress = codeBaseAddress + (ulong)kip.TextOffset;
 
-            int mmuFlags = 0;
+            ProcessCreationFlags flags = 0;
 
             if (AslrEnabled)
             {
                 // TODO: Randomization.
 
-                mmuFlags |= 0x20;
+                flags |= ProcessCreationFlags.EnableAslr;
             }
 
-            if (kip.Addr39Bits)
+            if (kip.Is64BitAddressSpace)
             {
-                mmuFlags |= (int)AddressSpaceType.Addr39Bits << 1;
+                flags |= ProcessCreationFlags.AddressSpace64Bit;
             }
 
-            if (kip.Is64Bits)
+            if (kip.Is64Bit)
             {
-                mmuFlags |= 1;
+                flags |= ProcessCreationFlags.Is64Bit;
             }
 
             ProcessCreationInfo creationInfo = new ProcessCreationInfo(
                 kip.Name,
-                kip.ProcessCategory,
-                kip.TitleId,
+                kip.Version,
+                kip.ProgramId,
                 codeAddress,
                 codePagesCount,
-                mmuFlags,
+                flags,
                 0,
                 0);
 
-            MemoryRegion memoryRegion = kip.IsService
+            MemoryRegion memoryRegion = kip.UsesSecureMemory
                 ? MemoryRegion.Service
                 : MemoryRegion.Application;
 
-            KMemoryRegionManager region = system.MemoryRegions[(int)memoryRegion];
+            KMemoryRegionManager region = context.MemoryManager.MemoryRegions[(int)memoryRegion];
 
-            KernelResult result = region.AllocatePages((ulong)codePagesCount, false, out KPageList pageList);
+            KernelResult result = region.AllocatePages(out KPageList pageList, (ulong)codePagesCount);
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+                Logger.Error?.Print(LogClass.Loader, $"Process initialization returned error \"{result}\".");
 
                 return false;
             }
 
-            KProcess process = new KProcess(system);
+            KProcess process = new KProcess(context);
+
+            var processContextFactory = new ArmProcessContextFactory(context.Device.System.CpuEngine, context.Device.Gpu);
 
             result = process.InitializeKip(
                 creationInfo,
                 kip.Capabilities,
                 pageList,
-                system.ResourceLimit,
-                memoryRegion);
+                context.ResourceLimit,
+                memoryRegion,
+                processContextFactory);
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+                Logger.Error?.Print(LogClass.Loader, $"Process initialization returned error \"{result}\".");
 
                 return false;
             }
@@ -98,66 +122,80 @@ namespace Ryujinx.HLE.HOS
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+                Logger.Error?.Print(LogClass.Loader, $"Process initialization returned error \"{result}\".");
 
                 return false;
             }
 
-            process.DefaultCpuCore = kip.DefaultProcessorId;
+            process.DefaultCpuCore = kip.IdealCoreId;
 
-            result = process.Start(kip.MainThreadPriority, (ulong)kip.MainThreadStackSize);
+            result = process.Start(kip.Priority, (ulong)kip.StackSize);
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process start returned error \"{result}\".");
+                Logger.Error?.Print(LogClass.Loader, $"Process start returned error \"{result}\".");
 
                 return false;
             }
 
-            system.Processes.Add(process.Pid, process);
+            context.Processes.TryAdd(process.Pid, process);
 
             return true;
         }
 
-        public static bool LoadStaticObjects(
-            Horizon       system,
-            Npdm          metaData,
-            IExecutable[] staticObjects,
-            byte[]        arguments = null)
+        public static bool LoadNsos(
+            KernelContext context,
+            out ProcessTamperInfo tamperInfo,
+            MetaLoader metaData,
+            ProgramInfo programInfo,
+            byte[] arguments = null,
+            params IExecutable[] executables)
         {
-            if (!metaData.Is64Bits)
+            LibHac.Result rc = metaData.GetNpdm(out var npdm);
+
+            if (rc.IsFailure())
             {
-                Logger.PrintWarning(LogClass.Loader, "32-bits application detected.");
+                tamperInfo = null;
+                return false;
             }
 
+            ref readonly var meta = ref npdm.Meta.Value;
+
             ulong argsStart = 0;
-            int   argsSize  = 0;
-            ulong codeStart = metaData.Is64Bits ? 0x8000000UL : 0x200000UL;
-            int   codeSize  = 0;
+            uint  argsSize  = 0;
+            ulong codeStart = (meta.Flags & 1) != 0 ? 0x8000000UL : 0x200000UL;
+            uint  codeSize  = 0;
 
-            ulong[] nsoBase = new ulong[staticObjects.Length];
-
-            for (int index = 0; index < staticObjects.Length; index++)
+            var buildIds = executables.Select(e => (e switch
             {
-                IExecutable staticObject = staticObjects[index];
+                NsoExecutable nso => BitConverter.ToString(nso.BuildId.ItemsRo.ToArray()),
+                NroExecutable nro => BitConverter.ToString(nro.Header.BuildId),
+                _ => ""
+            }).Replace("-", "").ToUpper());
 
-                int textEnd = staticObject.TextOffset + staticObject.Text.Length;
-                int roEnd   = staticObject.RoOffset   + staticObject.Ro.Length;
-                int dataEnd = staticObject.DataOffset + staticObject.Data.Length + staticObject.BssSize;
+            ulong[] nsoBase = new ulong[executables.Length];
 
-                int nsoSize = textEnd;
+            for (int index = 0; index < executables.Length; index++)
+            {
+                IExecutable nso = executables[index];
 
-                if ((uint)nsoSize < (uint)roEnd)
+                uint textEnd = nso.TextOffset + (uint)nso.Text.Length;
+                uint roEnd   = nso.RoOffset   + (uint)nso.Ro.Length;
+                uint dataEnd = nso.DataOffset + (uint)nso.Data.Length + nso.BssSize;
+
+                uint nsoSize = textEnd;
+
+                if (nsoSize < roEnd)
                 {
                     nsoSize = roEnd;
                 }
 
-                if ((uint)nsoSize < (uint)dataEnd)
+                if (nsoSize < dataEnd)
                 {
                     nsoSize = dataEnd;
                 }
 
-                nsoSize = BitUtils.AlignUp(nsoSize, KMemoryManager.PageSize);
+                nsoSize = BitUtils.AlignUp(nsoSize, KPageTableBase.PageSize);
 
                 nsoBase[index] = codeStart + (ulong)codeSize;
 
@@ -167,31 +205,36 @@ namespace Ryujinx.HLE.HOS
                 {
                     argsStart = (ulong)codeSize;
 
-                    argsSize = BitUtils.AlignDown(arguments.Length * 2 + ArgsTotalSize - 1, KMemoryManager.PageSize);
+                    argsSize = (uint)BitUtils.AlignDown(arguments.Length * 2 + ArgsTotalSize - 1, KPageTableBase.PageSize);
 
                     codeSize += argsSize;
                 }
             }
 
-            int codePagesCount = codeSize / KMemoryManager.PageSize;
+            PtcProfiler.StaticCodeStart = codeStart;
+            PtcProfiler.StaticCodeSize  = (ulong)codeSize;
 
-            int personalMmHeapPagesCount = metaData.PersonalMmHeapSize / KMemoryManager.PageSize;
+            int codePagesCount = (int)(codeSize / KPageTableBase.PageSize);
+
+            int personalMmHeapPagesCount = (int)(meta.SystemResourceSize / KPageTableBase.PageSize);
 
             ProcessCreationInfo creationInfo = new ProcessCreationInfo(
-                metaData.TitleName,
-                metaData.ProcessCategory,
-                metaData.Aci0.TitleId,
+                programInfo.Name,
+                (int)meta.Version,
+                programInfo.ProgramId,
                 codeStart,
                 codePagesCount,
-                metaData.MmuFlags,
+                (ProcessCreationFlags)meta.Flags | ProcessCreationFlags.IsApplication,
                 0,
                 personalMmHeapPagesCount);
 
+            context.Device.System.LibHacHorizonManager.InitializeApplicationClient(new ProgramId(programInfo.ProgramId), in npdm);
+
             KernelResult result;
 
-            KResourceLimit resourceLimit = new KResourceLimit(system);
+            KResourceLimit resourceLimit = new KResourceLimit(context);
 
-            long applicationRgSize = (long)system.MemoryRegions[(int)MemoryRegion.Application].Size;
+            long applicationRgSize = (long)context.MemoryManager.MemoryRegions[(int)MemoryRegion.Application].Size;
 
             result  = resourceLimit.SetLimitValue(LimitableResource.Memory,         applicationRgSize);
             result |= resourceLimit.SetLimitValue(LimitableResource.Thread,         608);
@@ -201,61 +244,80 @@ namespace Ryujinx.HLE.HOS
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process initialization failed setting resource limit values.");
+                Logger.Error?.Print(LogClass.Loader, $"Process initialization failed setting resource limit values.");
+
+                tamperInfo = null;
 
                 return false;
             }
 
-            KProcess process = new KProcess(system);
+            KProcess process = new KProcess(context, programInfo.AllowCodeMemoryForJit);
 
-            MemoryRegion memoryRegion = (MemoryRegion)((metaData.Acid.Flags >> 2) & 0xf);
+            MemoryRegion memoryRegion = (MemoryRegion)((npdm.Acid.Value.Flags >> 2) & 0xf);
 
             if (memoryRegion > MemoryRegion.NvServices)
             {
-                Logger.PrintError(LogClass.Loader, $"Process initialization failed due to invalid ACID flags.");
+                Logger.Error?.Print(LogClass.Loader, $"Process initialization failed due to invalid ACID flags.");
+
+                tamperInfo = null;
 
                 return false;
             }
+
+            var processContextFactory = new ArmProcessContextFactory(context.Device.System.CpuEngine, context.Device.Gpu);
 
             result = process.Initialize(
                 creationInfo,
-                metaData.Aci0.KernelAccessControl.Capabilities,
+                MemoryMarshal.Cast<byte, int>(npdm.KernelCapabilityData).ToArray(),
                 resourceLimit,
-                memoryRegion);
+                memoryRegion,
+                processContextFactory);
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+                Logger.Error?.Print(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+
+                tamperInfo = null;
 
                 return false;
             }
 
-            for (int index = 0; index < staticObjects.Length; index++)
+            for (int index = 0; index < executables.Length; index++)
             {
-                Logger.PrintInfo(LogClass.Loader, $"Loading image {index} at 0x{nsoBase[index]:x16}...");
+                Logger.Info?.Print(LogClass.Loader, $"Loading image {index} at 0x{nsoBase[index]:x16}...");
 
-                result = LoadIntoMemory(process, staticObjects[index], nsoBase[index]);
+                result = LoadIntoMemory(process, executables[index], nsoBase[index]);
 
                 if (result != KernelResult.Success)
                 {
-                    Logger.PrintError(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+                    Logger.Error?.Print(LogClass.Loader, $"Process initialization returned error \"{result}\".");
+
+                    tamperInfo = null;
 
                     return false;
                 }
             }
 
-            process.DefaultCpuCore = metaData.DefaultCpuId;
+            process.DefaultCpuCore = meta.DefaultCpuId;
 
-            result = process.Start(metaData.MainThreadPriority, (ulong)metaData.MainThreadStackSize);
+            result = process.Start(meta.MainThreadPriority, meta.MainThreadStackSize);
 
             if (result != KernelResult.Success)
             {
-                Logger.PrintError(LogClass.Loader, $"Process start returned error \"{result}\".");
+                Logger.Error?.Print(LogClass.Loader, $"Process start returned error \"{result}\".");
+
+                tamperInfo = null;
 
                 return false;
             }
 
-            system.Processes.Add(process.Pid, process);
+            context.Processes.TryAdd(process.Pid, process);
+
+            // Keep the build ids because the tamper machine uses them to know which process to associate a
+            // tamper to and also keep the starting address of each executable inside a process because some
+            // memory modifications are relative to this address.
+            tamperInfo = new ProcessTamperInfo(process, buildIds, nsoBase, process.MemoryManager.HeapRegionStart,
+                process.MemoryManager.AliasRegionStart, process.MemoryManager.CodeRegionStart);
 
             return true;
         }
@@ -274,39 +336,39 @@ namespace Ryujinx.HLE.HOS
                 end = bssStart + (ulong)image.BssSize;
             }
 
-            process.CpuMemory.WriteBytes((long)textStart, image.Text);
-            process.CpuMemory.WriteBytes((long)roStart,   image.Ro);
-            process.CpuMemory.WriteBytes((long)dataStart, image.Data);
+            process.CpuMemory.Write(textStart, image.Text);
+            process.CpuMemory.Write(roStart,   image.Ro);
+            process.CpuMemory.Write(dataStart, image.Data);
 
-            MemoryHelper.FillWithZeros(process.CpuMemory, (long)bssStart, image.BssSize);
+            process.CpuMemory.Fill(bssStart, image.BssSize, 0);
 
-            KernelResult SetProcessMemoryPermission(ulong address, ulong size, MemoryPermission permission)
+            KernelResult SetProcessMemoryPermission(ulong address, ulong size, KMemoryPermission permission)
             {
                 if (size == 0)
                 {
                     return KernelResult.Success;
                 }
 
-                size = BitUtils.AlignUp(size, KMemoryManager.PageSize);
+                size = BitUtils.AlignUp(size, KPageTableBase.PageSize);
 
                 return process.MemoryManager.SetProcessMemoryPermission(address, size, permission);
             }
 
-            KernelResult result = SetProcessMemoryPermission(textStart, (ulong)image.Text.Length, MemoryPermission.ReadAndExecute);
+            KernelResult result = SetProcessMemoryPermission(textStart, (ulong)image.Text.Length, KMemoryPermission.ReadAndExecute);
 
             if (result != KernelResult.Success)
             {
                 return result;
             }
 
-            result = SetProcessMemoryPermission(roStart, (ulong)image.Ro.Length, MemoryPermission.Read);
+            result = SetProcessMemoryPermission(roStart, (ulong)image.Ro.Length, KMemoryPermission.Read);
 
             if (result != KernelResult.Success)
             {
                 return result;
             }
 
-            return SetProcessMemoryPermission(dataStart, end - dataStart, MemoryPermission.ReadAndWrite);
+            return SetProcessMemoryPermission(dataStart, end - dataStart, KMemoryPermission.ReadAndWrite);
         }
     }
 }

@@ -1,81 +1,291 @@
+using ARMeilleure.Translation.PTC;
 using Gtk;
+using Ryujinx.Common;
+using Ryujinx.Common.Configuration;
+using Ryujinx.Common.GraphicsDriver;
 using Ryujinx.Common.Logging;
-using Ryujinx.Configuration;
-using Ryujinx.Profiler;
+using Ryujinx.Common.System;
+using Ryujinx.Common.SystemInfo;
+using Ryujinx.Ui.Common.Configuration;
+using Ryujinx.Modules;
 using Ryujinx.Ui;
+using Ryujinx.Ui.Common;
+using Ryujinx.Ui.Widgets;
+using SixLabors.ImageSharp.Formats.Jpeg;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 
 namespace Ryujinx
 {
     class Program
     {
+        public static double WindowScaleFactor { get; private set; }
+
+        public static string Version { get; private set; }
+
+        public static string ConfigurationPath { get; set; }
+
+        public static string CommandLineProfile { get; set; }
+
+        [DllImport("libX11")]
+        private extern static int XInitThreads();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern int MessageBoxA(IntPtr hWnd, string text, string caption, uint type);
+
+        private const uint MB_ICONWARNING = 0x30;
+
         static void Main(string[] args)
         {
-            Console.Title = "Ryujinx Console";
+            Version = ReleaseInformations.GetVersion();
+
+            if (OperatingSystem.IsWindows() && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134))
+            {
+                MessageBoxA(IntPtr.Zero, "You are running an outdated version of Windows.\n\nStarting on June 1st 2022, Ryujinx will only support Windows 10 1803 and newer.\n", $"Ryujinx {Version}", MB_ICONWARNING);
+            }
+
+            // Parse Arguments.
+            string launchPathArg      = null;
+            string baseDirPathArg     = null;
+            bool   startFullscreenArg = false;
+
+            for (int i = 0; i < args.Length; ++i)
+            {
+                string arg = args[i];
+
+                if (arg == "-r" || arg == "--root-data-dir")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        Logger.Error?.Print(LogClass.Application, $"Invalid option '{arg}'");
+
+                        continue;
+                    }
+
+                    baseDirPathArg = args[++i];
+                }
+                else if (arg == "-p" || arg == "--profile")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        Logger.Error?.Print(LogClass.Application, $"Invalid option '{arg}'");
+
+                        continue;
+                    }
+
+                    CommandLineProfile = args[++i];
+                }
+                else if (arg == "-f" || arg == "--fullscreen")
+                {
+                    startFullscreenArg = true;
+                }
+                else if (launchPathArg == null)
+                {
+                    launchPathArg = arg;
+                }
+            }
+
+            // Make process DPI aware for proper window sizing on high-res screens.
+            ForceDpiAware.Windows();
+            WindowScaleFactor = ForceDpiAware.GetWindowScaleFactor();
+
+            // Delete backup files after updating.
+            Task.Run(Updater.CleanupUpdate);
+
+            Console.Title = $"Ryujinx Console {Version}";
+
+            // NOTE: GTK3 doesn't init X11 in a multi threaded way.
+            // This ends up causing race condition and abort of XCB when a context is created by SPB (even if SPB do call XInitThreads).
+            if (OperatingSystem.IsLinux())
+            {
+                XInitThreads();
+            }
 
             string systemPath = Environment.GetEnvironmentVariable("Path", EnvironmentVariableTarget.Machine);
             Environment.SetEnvironmentVariable("Path", $"{Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bin")};{systemPath}");
 
-            GLib.ExceptionManager.UnhandledException += Glib_UnhandledException;
+            // Hook unhandled exception and process exit events.
+            GLib.ExceptionManager.UnhandledException   += (GLib.UnhandledExceptionArgs e)                => ProcessUnhandledException(e.ExceptionObject as Exception, e.IsTerminating);
+            AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) => ProcessUnhandledException(e.ExceptionObject as Exception, e.IsTerminating);
+            AppDomain.CurrentDomain.ProcessExit        += (object sender, EventArgs e)                   => Exit();
 
-            // Initialize the configuration
+            // Setup base data directory.
+            AppDataManager.Initialize(baseDirPathArg);
+
+            // Initialize the configuration.
             ConfigurationState.Initialize();
 
-            // Initialize the logger system
+            // Initialize the logger system.
             LoggerModule.Initialize();
 
-            // Initialize Discord integration
+            // Initialize Discord integration.
             DiscordIntegrationModule.Initialize();
 
-            string configurationPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config.json");
+            // Sets ImageSharp Jpeg Encoder Quality.
+            SixLabors.ImageSharp.Configuration.Default.ImageFormatsManager.SetEncoder(JpegFormat.Instance, new JpegEncoder()
+            {
+                Quality = 100
+            });
+
+            string localConfigurationPath   = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config.json");
+            string appDataConfigurationPath = Path.Combine(AppDataManager.BaseDirPath,            "Config.json");
 
             // Now load the configuration as the other subsystems are now registered
-            if (File.Exists(configurationPath))
+            ConfigurationPath = File.Exists(localConfigurationPath)
+                ? localConfigurationPath
+                : File.Exists(appDataConfigurationPath)
+                    ? appDataConfigurationPath
+                    : null;
+
+            bool showVulkanPrompt = false;
+
+            if (ConfigurationPath == null)
             {
-                ConfigurationFileFormat configurationFileFormat = ConfigurationFileFormat.Load(configurationPath);
-                ConfigurationState.Instance.Load(configurationFileFormat);
+                // No configuration, we load the default values and save it to disk
+                ConfigurationPath = appDataConfigurationPath;
+
+                ConfigurationState.Instance.LoadDefault();
+                ConfigurationState.Instance.ToFileFormat().SaveConfig(ConfigurationPath);
+
+                showVulkanPrompt = true;
             }
             else
             {
-                // No configuration, we load the default values and save it on disk
-                ConfigurationState.Instance.LoadDefault();
-                ConfigurationState.Instance.ToFileFormat().SaveConfig(configurationPath);
+                if (ConfigurationFileFormat.TryLoad(ConfigurationPath, out ConfigurationFileFormat configurationFileFormat))
+                {
+                    ConfigurationLoadResult result = ConfigurationState.Instance.Load(configurationFileFormat, ConfigurationPath);
+
+                    if ((result & ConfigurationLoadResult.MigratedFromPreVulkan) != 0)
+                    {
+                        showVulkanPrompt = true;
+                    }
+                }
+                else
+                {
+                    ConfigurationState.Instance.LoadDefault();
+
+                    showVulkanPrompt = true;
+
+                    Logger.Warning?.PrintMsg(LogClass.Application, $"Failed to load config! Loading the default config instead.\nFailed config location {ConfigurationPath}");
+                }
             }
 
+            // Logging system information.
+            PrintSystemInfo();
 
-            Profile.Initialize();
+            // Enable OGL multithreading on the driver, when available.
+            BackendThreading threadingMode = ConfigurationState.Instance.Graphics.BackendThreading;
+            DriverUtilities.ToggleOGLThreading(threadingMode == BackendThreading.Off);
 
+            // Initialize Gtk.
             Application.Init();
 
-            string appDataPath     = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RyuFs", "system", "prod.keys");
-            string userProfilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".switch", "prod.keys");
-            if (!File.Exists(appDataPath) && !File.Exists(userProfilePath))
+            // Check if keys exists.
+            bool hasSystemProdKeys = File.Exists(Path.Combine(AppDataManager.KeysDirPath, "prod.keys"));
+            bool hasCommonProdKeys = AppDataManager.Mode == AppDataManager.LaunchMode.UserProfile && File.Exists(Path.Combine(AppDataManager.KeysDirPathUser, "prod.keys"));
+            if (!hasSystemProdKeys && !hasCommonProdKeys)
             {
-                GtkDialog.CreateErrorDialog($"Key file was not found. Please refer to `KEYS.md` for more info");
+                UserErrorDialog.CreateUserErrorDialog(UserError.NoKeys);
             }
 
+            // Show the main window UI.
             MainWindow mainWindow = new MainWindow();
             mainWindow.Show();
 
-            if (args.Length == 1)
+            if (launchPathArg != null)
             {
-                mainWindow.LoadApplication(args[0]);
+                mainWindow.LoadApplication(launchPathArg, startFullscreenArg);
+            }
+
+            if (ConfigurationState.Instance.CheckUpdatesOnStart.Value && Updater.CanUpdate(false))
+            {
+                Updater.BeginParse(mainWindow, false).ContinueWith(task =>
+                {
+                    Logger.Error?.Print(LogClass.Application, $"Updater Error: {task.Exception}");
+                }, TaskContinuationOptions.OnlyOnFaulted);
+            }
+
+            if (showVulkanPrompt)
+            {
+                var buttonTexts = new Dictionary<int, string>()
+                {
+                    { 0, "Yes (Vulkan)" },
+                    { 1, "No (OpenGL)" }
+                };
+
+                ResponseType response = GtkDialog.CreateCustomDialog(
+                    "Ryujinx - Default graphics backend",
+                    "Use Vulkan as default graphics backend?",
+                    "Ryujinx now supports the Vulkan API. " +
+                    "Vulkan greatly improves shader compilation performance, " +
+                    "and fixes some graphical glitches; however, since it is a new feature, " +
+                    "you may experience some issues that did not occur with OpenGL.\n\n" +
+                    "Note that you will also lose any existing shader cache the first time you start a game " +
+                    "on version 1.1.200 onwards, because Vulkan required changes to the shader cache that makes it incompatible with previous versions.\n\n" +
+                    "Would you like to set Vulkan as the default graphics backend? " +
+                    "You can change this at any time on the settings window.",
+                    buttonTexts,
+                    MessageType.Question);
+
+                ConfigurationState.Instance.Graphics.GraphicsBackend.Value = response == 0
+                    ? GraphicsBackend.Vulkan
+                    : GraphicsBackend.OpenGl;
+
+                ConfigurationState.Instance.ToFileFormat().SaveConfig(Program.ConfigurationPath);
             }
 
             Application.Run();
         }
 
-        private static void Glib_UnhandledException(GLib.UnhandledExceptionArgs e)
+        private static void PrintSystemInfo()
         {
-            Exception exception = e.ExceptionObject as Exception;
+            Logger.Notice.Print(LogClass.Application, $"Ryujinx Version: {Version}");
+            SystemInfo.Gather().Print();
 
-            Logger.PrintError(LogClass.Application, $"Unhandled exception caught: {exception}");
+            var enabledLogs = Logger.GetEnabledLevels();
+            Logger.Notice.Print(LogClass.Application, $"Logs Enabled: {(enabledLogs.Count == 0 ? "<None>" : string.Join(", ", enabledLogs))}");
 
-            if (e.IsTerminating)
+            if (AppDataManager.Mode == AppDataManager.LaunchMode.Custom)
             {
-                Logger.Shutdown();
+                Logger.Notice.Print(LogClass.Application, $"Launch Mode: Custom Path {AppDataManager.BaseDirPath}");
             }
+            else
+            {
+                Logger.Notice.Print(LogClass.Application, $"Launch Mode: {AppDataManager.Mode}");
+            }
+        }
+
+        private static void ProcessUnhandledException(Exception ex, bool isTerminating)
+        {
+            Ptc.Close();
+            PtcProfiler.Stop();
+
+            string message = $"Unhandled exception caught: {ex}";
+
+            Logger.Error?.PrintMsg(LogClass.Application, message);
+
+            if (Logger.Error == null)
+            {
+                Logger.Notice.PrintMsg(LogClass.Application, message);
+            }
+
+            if (isTerminating)
+            {
+                Exit();
+            }
+        }
+
+        public static void Exit()
+        {
+            DiscordIntegrationModule.Exit();
+
+            Ptc.Dispose();
+            PtcProfiler.Dispose();
+
+            Logger.Shutdown();
         }
     }
 }

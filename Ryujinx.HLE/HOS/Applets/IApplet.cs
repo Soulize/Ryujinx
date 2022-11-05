@@ -1,5 +1,8 @@
 ﻿using Ryujinx.HLE.HOS.Services.Am.AppletAE;
+using Ryujinx.HLE.Ui;
+using Ryujinx.Memory;
 using System;
+using System.Runtime.InteropServices;
 
 namespace Ryujinx.HLE.HOS.Applets
 {
@@ -11,5 +14,15 @@ namespace Ryujinx.HLE.HOS.Applets
                          AppletSession interactiveSession);
 
         ResultCode GetResult();
+
+        bool DrawTo(RenderingSurfaceInfo surfaceInfo, IVirtualMemoryManager destination, ulong position)
+        {
+            return false;
+        }
+
+        static T ReadStruct<T>(ReadOnlySpan<byte> data) where T : unmanaged
+        {
+            return MemoryMarshal.Cast<byte, T>(data)[0];
+        }
     }
 }

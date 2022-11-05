@@ -1,7 +1,7 @@
 using ARMeilleure.IntermediateRepresentation;
-using System.Collections.Generic;
 
-using static ARMeilleure.IntermediateRepresentation.OperandHelper;
+using static ARMeilleure.IntermediateRepresentation.Operand.Factory;
+using static ARMeilleure.IntermediateRepresentation.Operation.Factory;
 
 namespace ARMeilleure.Translation
 {
@@ -9,36 +9,38 @@ namespace ARMeilleure.Translation
     {
         public static void Deconstruct(ControlFlowGraph cfg)
         {
-            foreach (BasicBlock block in cfg.Blocks)
+            for (BasicBlock block = cfg.Blocks.First; block != null; block = block.ListNext)
             {
-                LinkedListNode<Node> node = block.Operations.First;
+                Operation operation = block.Operations.First;
 
-                while (node?.Value is PhiNode phi)
+                while (operation != default && operation.Instruction == Instruction.Phi)
                 {
-                    LinkedListNode<Node> nextNode = node.Next;
+                    Operation nextNode = operation.ListNext;
 
-                    Operand local = Local(phi.Destination.Type);
+                    Operand local = Local(operation.Destination.Type);
+
+                    PhiOperation phi = operation.AsPhi();
 
                     for (int index = 0; index < phi.SourcesCount; index++)
                     {
-                        BasicBlock predecessor = phi.GetBlock(index);
+                        BasicBlock predecessor = phi.GetBlock(cfg, index);
 
                         Operand source = phi.GetSource(index);
 
-                        predecessor.Append(new Operation(Instruction.Copy, local, source));
+                        predecessor.Append(Operation(Instruction.Copy, local, source));
 
-                        phi.SetSource(index, null);
+                        phi.SetSource(index, default);
                     }
 
-                    Operation copyOp = new Operation(Instruction.Copy, phi.Destination, local);
+                    Operation copyOp = Operation(Instruction.Copy, operation.Destination, local);
 
-                    block.Operations.AddBefore(node, copyOp);
+                    block.Operations.AddBefore(operation, copyOp);
 
-                    phi.Destination = null;
+                    operation.Destination = default;
 
-                    block.Operations.Remove(node);
+                    block.Operations.Remove(operation);
 
-                    node = nextNode;
+                    operation = nextNode;
                 }
             }
         }

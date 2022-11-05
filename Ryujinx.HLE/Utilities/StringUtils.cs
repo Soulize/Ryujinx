@@ -1,4 +1,5 @@
-﻿using Ryujinx.HLE.HOS;
+﻿using LibHac.Common;
+using Ryujinx.HLE.HOS;
 using System;
 using System.Globalization;
 using System.IO;
@@ -11,7 +12,7 @@ namespace Ryujinx.HLE.Utilities
     {
         public static byte[] GetFixedLengthBytes(string inputString, int size, Encoding encoding)
         {
-            inputString = inputString + "\0";
+            inputString += "\0";
 
             int bytesCount = encoding.GetByteCount(inputString);
 
@@ -35,6 +36,15 @@ namespace Ryujinx.HLE.Utilities
             return output;
         }
 
+        public static string ReadInlinedAsciiString(BinaryReader reader, int maxSize)
+        {
+            byte[] data = reader.ReadBytes(maxSize);
+
+            int stringSize = Array.IndexOf<byte>(data, 0);
+
+            return Encoding.ASCII.GetString(data, 0, stringSize < 0 ? maxSize : stringSize);
+        }
+
         public static byte[] HexToBytes(string hexString)
         {
             // Ignore last character if HexLength % 2 != 0.
@@ -44,22 +54,34 @@ namespace Ryujinx.HLE.Utilities
 
             for (int index = 0; index < bytesInHex; index++)
             {
-                output[index] = byte.Parse(hexString.Substring(index * 2, 2), NumberStyles.HexNumber);
+                output[index] = byte.Parse(hexString.AsSpan(index * 2, 2), NumberStyles.HexNumber);
             }
 
             return output;
         }
 
+        public static string ReadUtf8String(ReadOnlySpan<byte> data, out int dataRead)
+        {
+            dataRead = data.IndexOf((byte)0) + 1;
+
+            if (dataRead <= 1)
+            {
+                return string.Empty;
+            }
+
+            return Encoding.UTF8.GetString(data[..dataRead]);
+        }
+
         public static string ReadUtf8String(ServiceCtx context, int index = 0)
         {
-            long position = context.Request.PtrBuff[index].Position;
-            long size     = context.Request.PtrBuff[index].Size;
+            ulong position = context.Request.PtrBuff[index].Position;
+            ulong size     = context.Request.PtrBuff[index].Size;
 
             using (MemoryStream ms = new MemoryStream())
             {
                 while (size-- > 0)
                 {
-                    byte value = context.Memory.ReadByte(position++);
+                    byte value = context.Memory.Read<byte>(position++);
 
                     if (value == 0)
                     {
@@ -71,18 +93,28 @@ namespace Ryujinx.HLE.Utilities
 
                 return Encoding.UTF8.GetString(ms.ToArray());
             }
+        }
+
+        public static U8Span ReadUtf8Span(ServiceCtx context, int index = 0)
+        {
+            ulong position = context.Request.PtrBuff[index].Position;
+            ulong size     = context.Request.PtrBuff[index].Size;
+
+            ReadOnlySpan<byte> buffer = context.Memory.GetSpan(position, (int)size);
+
+            return new U8Span(buffer);
         }
 
         public static string ReadUtf8StringSend(ServiceCtx context, int index = 0)
         {
-            long position = context.Request.SendBuff[index].Position;
-            long size     = context.Request.SendBuff[index].Size;
+            ulong position = context.Request.SendBuff[index].Position;
+            ulong size     = context.Request.SendBuff[index].Size;
 
             using (MemoryStream ms = new MemoryStream())
             {
                 while (size-- > 0)
                 {
-                    byte value = context.Memory.ReadByte(position++);
+                    byte value = context.Memory.Read<byte>(position++);
 
                     if (value == 0)
                     {
@@ -96,7 +128,7 @@ namespace Ryujinx.HLE.Utilities
             }
         }
 
-        public static unsafe int CompareCStr(char* s1, char* s2)
+        public static int CompareCStr(ReadOnlySpan<byte> s1, ReadOnlySpan<byte> s2)
         {
             int s1Index = 0;
             int s2Index = 0;
@@ -110,11 +142,11 @@ namespace Ryujinx.HLE.Utilities
             return s2[s2Index] - s1[s1Index];
         }
 
-        public static unsafe int LengthCstr(char* s)
+        public static int LengthCstr(ReadOnlySpan<byte> s)
         {
             int i = 0;
 
-            while (s[i] != '\0')
+            while (s[i] != 0)
             {
                 i++;
             }

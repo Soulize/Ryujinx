@@ -4,56 +4,75 @@ namespace Ryujinx.HLE.HOS.Services.Vi.RootService.ApplicationDisplayService
 {
     class IManagerDisplayService : IpcService
     {
-        private static IApplicationDisplayService _applicationDisplayService;
+        private IApplicationDisplayService _applicationDisplayService;
 
         public IManagerDisplayService(IApplicationDisplayService applicationDisplayService)
         {
             _applicationDisplayService = applicationDisplayService;
         }
 
-        [Command(2010)]
+        [CommandHipc(1102)]
+        // GetDisplayResolution(u64 display_id) -> (u64 width, u64 height)
+        public ResultCode GetDisplayResolution(ServiceCtx context)
+        {
+            ulong displayId = context.RequestData.ReadUInt64();
+
+            (ulong width, ulong height) = AndroidSurfaceComposerClient.GetDisplayInfo(context, displayId);
+
+            context.ResponseData.Write(width);
+            context.ResponseData.Write(height);
+
+            return ResultCode.Success;
+        }
+
+        [CommandHipc(2010)]
         // CreateManagedLayer(u32, u64, nn::applet::AppletResourceUserId) -> u64
         public ResultCode CreateManagedLayer(ServiceCtx context)
         {
-            Logger.PrintStub(LogClass.ServiceVi);
+            long layerFlags           = context.RequestData.ReadInt64();
+            long displayId            = context.RequestData.ReadInt64();
+            long appletResourceUserId = context.RequestData.ReadInt64();
 
-            context.ResponseData.Write(0L); //LayerId
+            ulong pid = context.Device.System.AppletState.AppletResourceUserIds.GetData<ulong>((int)appletResourceUserId);
+
+            context.Device.System.SurfaceFlinger.CreateLayer(out long layerId, pid);
+            context.Device.System.SurfaceFlinger.SetRenderLayer(layerId);
+
+            context.ResponseData.Write(layerId);
 
             return ResultCode.Success;
         }
 
-        [Command(2011)]
+        [CommandHipc(2011)]
         // DestroyManagedLayer(u64)
         public ResultCode DestroyManagedLayer(ServiceCtx context)
         {
-            Logger.PrintStub(LogClass.ServiceVi);
+            long layerId = context.RequestData.ReadInt64();
 
-            return ResultCode.Success;
+            return context.Device.System.SurfaceFlinger.DestroyManagedLayer(layerId);
         }
 
-        [Command(2012)] // 7.0.0+
+        [CommandHipc(2012)] // 7.0.0+
         // CreateStrayLayer(u32, u64) -> (u64, u64, buffer<bytes, 6>)
         public ResultCode CreateStrayLayer(ServiceCtx context)
         {
-            Logger.PrintStub(LogClass.ServiceVi);
-
             return _applicationDisplayService.CreateStrayLayer(context);
         }
 
-        [Command(6000)]
+        [CommandHipc(6000)]
         // AddToLayerStack(u32, u64)
         public ResultCode AddToLayerStack(ServiceCtx context)
         {
-            Logger.PrintStub(LogClass.ServiceVi);
+            Logger.Stub?.PrintStub(LogClass.ServiceVi);
 
             return ResultCode.Success;
         }
 
-        [Command(6002)]
+        [CommandHipc(6002)]
         // SetLayerVisibility(b8, u64)
         public ResultCode SetLayerVisibility(ServiceCtx context)
         {
-            Logger.PrintStub(LogClass.ServiceVi);
+            Logger.Stub?.PrintStub(LogClass.ServiceVi);
 
             return ResultCode.Success;
         }

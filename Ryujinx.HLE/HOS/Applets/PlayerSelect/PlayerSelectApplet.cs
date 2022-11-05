@@ -19,8 +19,7 @@ namespace Ryujinx.HLE.HOS.Applets
             _system = system;
         }
 
-        public ResultCode Start(AppletSession normalSession,
-                                AppletSession interactiveSession)
+        public ResultCode Start(AppletSession normalSession, AppletSession interactiveSession)
         {
             _normalSession      = normalSession;
             _interactiveSession = interactiveSession;
@@ -29,6 +28,8 @@ namespace Ryujinx.HLE.HOS.Applets
             _normalSession.Push(BuildResponse());
 
             AppletStateChanged?.Invoke(this, null);
+
+            _system.ReturnFocus();
 
             return ResultCode.Success;
         }
@@ -40,7 +41,7 @@ namespace Ryujinx.HLE.HOS.Applets
 
         private byte[] BuildResponse()
         {
-            UserProfile currentUser = _system.State.Account.LastOpenedUser;
+            UserProfile currentUser = _system.AccountManager.LastOpenedUser;
 
             using (MemoryStream stream = new MemoryStream())
             using (BinaryWriter writer = new BinaryWriter(stream))

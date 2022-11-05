@@ -1,37 +1,57 @@
 ﻿using LibHac;
-using LibHac.FsService;
+using LibHac.Common;
+using LibHac.Fs;
 
 namespace Ryujinx.HLE.HOS.Services.Fs
 {
-    class IDeviceOperator : IpcService
+    class IDeviceOperator : DisposableIpcService
     {
-        private LibHac.FsService.IDeviceOperator _baseOperator;
+        private SharedRef<LibHac.FsSrv.Sf.IDeviceOperator> _baseOperator;
 
-        public IDeviceOperator(LibHac.FsService.IDeviceOperator baseOperator)
+        public IDeviceOperator(ref SharedRef<LibHac.FsSrv.Sf.IDeviceOperator> baseOperator)
         {
-            _baseOperator = baseOperator;
+            _baseOperator = SharedRef<LibHac.FsSrv.Sf.IDeviceOperator>.CreateMove(ref baseOperator);
         }
 
-        [Command(200)]
-        // IsGameCardInserted() -> b8 is_inserted
-        public ResultCode IsGameCardInserted(ServiceCtx context)
+        [CommandHipc(0)]
+        // IsSdCardInserted() -> b8 is_inserted
+        public ResultCode IsSdCardInserted(ServiceCtx context)
         {
-            Result result = _baseOperator.IsGameCardInserted(out bool isInserted);
+            Result result = _baseOperator.Get.IsSdCardInserted(out bool isInserted);
 
             context.ResponseData.Write(isInserted);
 
             return (ResultCode)result.Value;
         }
 
-        [Command(202)]
+        [CommandHipc(200)]
+        // IsGameCardInserted() -> b8 is_inserted
+        public ResultCode IsGameCardInserted(ServiceCtx context)
+        {
+            Result result = _baseOperator.Get.IsGameCardInserted(out bool isInserted);
+
+            context.ResponseData.Write(isInserted);
+
+            return (ResultCode)result.Value;
+        }
+
+        [CommandHipc(202)]
         // GetGameCardHandle() -> u32 gamecard_handle
         public ResultCode GetGameCardHandle(ServiceCtx context)
         {
-            Result result = _baseOperator.GetGameCardHandle(out GameCardHandle handle);
+            Result result = _baseOperator.Get.GetGameCardHandle(out GameCardHandle handle);
 
             context.ResponseData.Write(handle.Value);
 
             return (ResultCode)result.Value;
+        }
+
+        protected override void Dispose(bool isDisposing)
+        {
+            if (isDisposing)
+            {
+                _baseOperator.Destroy();
+            }
         }
     }
 }

@@ -1,18 +1,35 @@
+using LibHac;
+using LibHac.Common;
+using Ryujinx.Common;
 using Ryujinx.HLE.HOS.Services.Bcat.ServiceCreator;
 using Ryujinx.HLE.HOS.Services.Arp;
 
 namespace Ryujinx.HLE.HOS.Services.Bcat
 {
-    [Service("bcat:a")]
-    [Service("bcat:m")]
-    [Service("bcat:u")]
-    [Service("bcat:s")]
-    class IServiceCreator : IpcService
+    [Service("bcat:a", "bcat:a")]
+    [Service("bcat:m", "bcat:m")]
+    [Service("bcat:u", "bcat:u")]
+    [Service("bcat:s", "bcat:s")]
+    class IServiceCreator : DisposableIpcService
     {
-        public IServiceCreator(ServiceCtx context) { }
+        private SharedRef<LibHac.Bcat.Impl.Ipc.IServiceCreator> _base;
 
-        [Command(0)]
-        // CreateBcatService(u64, pid) -> object<nn::bcat::detail::ipc::IBcatService>
+        public IServiceCreator(ServiceCtx context, string serviceName)
+        {
+            var applicationClient = context.Device.System.LibHacHorizonManager.ApplicationClient;
+            applicationClient.Sm.GetService(ref _base, serviceName).ThrowIfFailure();
+        }
+
+        protected override void Dispose(bool isDisposing)
+        {
+            if (isDisposing)
+            {
+                _base.Destroy();
+            }
+        }
+
+        [CommandHipc(0)]
+        // CreateBcatService(pid) -> object<nn::bcat::detail::ipc::IBcatService>
         public ResultCode CreateBcatService(ServiceCtx context)
         {
             // TODO: Call arp:r GetApplicationLaunchProperty with the pid to get the TitleId.
@@ -29,22 +46,40 @@ namespace Ryujinx.HLE.HOS.Services.Bcat
             return ResultCode.Success;
         }
 
-        [Command(1)]
-        // CreateDeliveryCacheStorageService(u64, pid) -> object<nn::bcat::detail::ipc::IDeliveryCacheStorageService>
+        [CommandHipc(1)]
+        // CreateDeliveryCacheStorageService(pid) -> object<nn::bcat::detail::ipc::IDeliveryCacheStorageService>
         public ResultCode CreateDeliveryCacheStorageService(ServiceCtx context)
         {
-            // TODO: Call arp:r GetApplicationLaunchProperty with the pid to get the TitleId.
-            //       Add an instance of nn::bcat::detail::service::core::ApplicationStorageManager who load "bcat-dc-X:/" system save data,
-            //       return ResultCode.NullSaveData if failed.
-            //       Where X depend of the ApplicationLaunchProperty stored in an array (range 0-3).
-            //       Add an instance of nn::bcat::detail::service::ServiceMemoryManager.
+            ulong pid = context.RequestData.ReadUInt64();
 
-            MakeObject(context, new IDeliveryCacheStorageService(context, ApplicationLaunchProperty.GetByPid(context)));
+            using var serv = new SharedRef<LibHac.Bcat.Impl.Ipc.IDeliveryCacheStorageService>();
 
-            // NOTE: If the IDeliveryCacheStorageService is null this error is returned, Doesn't occur in our case. 
-            //       return ResultCode.NullObject;
+            Result rc = _base.Get.CreateDeliveryCacheStorageService(ref serv.Ref(), pid);
 
-            return ResultCode.Success;
+            if (rc.IsSuccess())
+            {
+                MakeObject(context, new IDeliveryCacheStorageService(context, ref serv.Ref()));
+            }
+
+            return (ResultCode)rc.Value;
+        }
+
+        [CommandHipc(2)]
+        // CreateDeliveryCacheStorageServiceWithApplicationId(nn::ApplicationId) -> object<nn::bcat::detail::ipc::IDeliveryCacheStorageService>
+        public ResultCode CreateDeliveryCacheStorageServiceWithApplicationId(ServiceCtx context)
+        {
+            ApplicationId applicationId = context.RequestData.ReadStruct<ApplicationId>();
+
+            using var service = new SharedRef<LibHac.Bcat.Impl.Ipc.IDeliveryCacheStorageService>();
+
+            Result rc = _base.Get.CreateDeliveryCacheStorageServiceWithApplicationId(ref service.Ref(), applicationId);
+
+            if (rc.IsSuccess())
+            {
+                MakeObject(context, new IDeliveryCacheStorageService(context, ref service.Ref()));
+            }
+
+            return (ResultCode)rc.Value;
         }
     }
 }

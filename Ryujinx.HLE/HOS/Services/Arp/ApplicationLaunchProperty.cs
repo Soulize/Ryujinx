@@ -1,16 +1,16 @@
-﻿using Ryujinx.HLE.FileSystem;
-using Ryujinx.HLE.Utilities;
-using System;
+﻿using LibHac.Ncm;
 
 namespace Ryujinx.HLE.HOS.Services.Arp
 {
     class ApplicationLaunchProperty
     {
-        public long  TitleId;
+        public ulong TitleId;
         public int   Version;
         public byte  BaseGameStorageId;
         public byte  UpdateGameStorageId;
+#pragma warning disable CS0649
         public short Padding;
+#pragma warning restore CS0649
 
         public static ApplicationLaunchProperty Default
         {
@@ -20,7 +20,7 @@ namespace Ryujinx.HLE.HOS.Services.Arp
                 {
                     TitleId             = 0x00,
                     Version             = 0x00,
-                    BaseGameStorageId   = (byte)StorageId.NandSystem,
+                    BaseGameStorageId   = (byte)StorageId.BuiltInSystem,
                     UpdateGameStorageId = (byte)StorageId.None
                 };
             }
@@ -33,9 +33,9 @@ namespace Ryujinx.HLE.HOS.Services.Arp
 
             return new ApplicationLaunchProperty
             {
-                TitleId             = BitConverter.ToInt64(StringUtils.HexToBytes(context.Device.System.TitleId), 0),
+                TitleId             = context.Device.Application.TitleId,
                 Version             = 0x00,
-                BaseGameStorageId   = (byte)StorageId.NandSystem,
+                BaseGameStorageId   = (byte)StorageId.BuiltInSystem,
                 UpdateGameStorageId = (byte)StorageId.None
             };
         }
