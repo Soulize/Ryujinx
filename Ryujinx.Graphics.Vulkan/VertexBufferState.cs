@@ -104,7 +104,8 @@ namespace Ryujinx.Graphics.Vulkan
 
             if (autoBuffer != null)
             {
-                var buffer = autoBuffer.Get(cbs, _offset, _size).Value;
+                int offset = _offset;
+                var buffer = autoBuffer.GetMirrorable(cbs, ref offset, _size).Value;
 
                 if (gd.Capabilities.SupportsExtendedDynamicState)
                 {
@@ -113,13 +114,13 @@ namespace Ryujinx.Graphics.Vulkan
                         binding,
                         1,
                         buffer,
-                        (ulong)_offset,
+                        (ulong)offset,
                         (ulong)_size,
                         (ulong)_stride);
                 }
                 else
                 {
-                    gd.Api.CmdBindVertexBuffers(cbs.CommandBuffer, binding, 1, buffer, (ulong)_offset);
+                    gd.Api.CmdBindVertexBuffers(cbs.CommandBuffer, binding, 1, buffer, (ulong)offset);
                 }
             }
         }
@@ -127,6 +128,11 @@ namespace Ryujinx.Graphics.Vulkan
         public bool BoundEquals(Auto<DisposableBuffer> buffer)
         {
             return _buffer == buffer;
+        }
+
+        public bool Overlaps(Auto<DisposableBuffer> buffer, int offset, int size)
+        {
+            return buffer == _buffer && offset < _offset + _size && offset + size > _offset;
         }
 
         public void Dispose()

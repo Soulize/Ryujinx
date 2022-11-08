@@ -152,7 +152,7 @@ namespace Ryujinx.Graphics.Vulkan
         {
             EndRenderPass();
 
-            var dst = Gd.BufferManager.GetBuffer(CommandBuffer, destination, offset, size, true).Get(Cbs, offset, size).Value;
+            var dst = Gd.BufferManager.GetBuffer(CommandBuffer, destination, offset, size, true).Get(Cbs, offset, size, true).Value;
 
             BufferHolder.InsertBufferBarrier(
                 Gd,
@@ -468,11 +468,11 @@ namespace Ryujinx.Graphics.Vulkan
 
             var buffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, true)
-                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, true).Value;
 
             var countBuffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, parameterBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, true)
-                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size).Value;
+                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size, true).Value;
 
             Gd.DrawIndirectCountApi.CmdDrawIndirectCount(
                 CommandBuffer,
@@ -503,11 +503,11 @@ namespace Ryujinx.Graphics.Vulkan
 
             var buffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, indirectBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, true)
-                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, true).Value;
 
             var countBuffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, parameterBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, true)
-                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size).Value;
+                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size, true).Value;
 
             Gd.DrawIndirectCountApi.CmdDrawIndexedIndirectCount(
                 CommandBuffer,
@@ -517,6 +517,26 @@ namespace Ryujinx.Graphics.Vulkan
                 (ulong)parameterBuffer.Offset,
                 (uint)maxDrawCount,
                 (uint)stride);
+        }
+
+        internal void Rebind(Auto<DisposableBuffer> buffer, int offset, int size)
+        {
+            _descriptorSetUpdater.Rebind(buffer, offset, size);
+
+            /*
+            if (_indexBuffer.Overlaps(buffer, offset, size))
+            {
+                _indexBuffer.BindIndexBuffer(Gd, Cbs);
+            }
+            */
+
+            for (int i = 0; i < _vertexBuffers.Length; i++)
+            {
+                if (_vertexBuffers[i].Overlaps(buffer, offset, size))
+                {
+                    _vertexBuffers[i].BindVertexBuffer(Gd, Cbs, (uint)i, ref _newState);
+                }
+            }
         }
 
         public void SetAlphaTest(bool enable, float reference, GAL.CompareOp op)
