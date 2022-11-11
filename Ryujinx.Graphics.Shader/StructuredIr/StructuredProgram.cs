@@ -71,12 +71,12 @@ namespace Ryujinx.Graphics.Shader.StructuredIr
                     var locations = config.GpuAccessor.QueryTransformFeedbackVaryingLocations(tfbIndex);
                     var stride = config.GpuAccessor.QueryTransformFeedbackStride(tfbIndex);
 
-                    for (int i = 0; i < locations.Length; i++)
+                    for (int j = 0; j < locations.Length; j++)
                     {
-                        byte location = locations[i];
+                        byte location = locations[j];
                         if (location < 0xc0)
                         {
-                            context.Info.TransformFeedbackOutputs[location] = new TransformFeedbackOutput(tfbIndex, i * 4, stride);
+                            context.Info.TransformFeedbackOutputs[location] = new TransformFeedbackOutput(tfbIndex, j * 4, stride);
                         }
                     }
                 }
