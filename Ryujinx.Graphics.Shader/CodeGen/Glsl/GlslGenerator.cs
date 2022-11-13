@@ -134,7 +134,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                     if (assignment.Destination is AstOperand operand && operand.Type.IsAttribute())
                     {
                         bool perPatch = operand.Type == OperandType.AttributePerPatch;
-                        dest = OperandManager.GetOutAttributeName(context, operand.Value, perPatch);
+                        dest = OperandManager.GetOutAttributeName(operand.Value, context.Config, perPatch);
                     }
                     else
                     {

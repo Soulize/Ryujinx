@@ -10,7 +10,6 @@ using Ryujinx.Ava.Ui.Windows;
 using Ryujinx.Common;
 using Ryujinx.Common.Logging;
 using Ryujinx.Ui.Common.Configuration;
-using Ryujinx.Ui.Common.Helper;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -65,7 +64,8 @@ namespace Ryujinx.Ava
                     if (result == UserResult.Yes)
                     {
                         var path = Process.GetCurrentProcess().MainModule.FileName;
-                        var proc = Process.Start(path, CommandLineState.Arguments);
+                        var info = new ProcessStartInfo() { FileName = path, UseShellExecute = false };
+                        var proc = Process.Start(info);
                         desktop.Shutdown();
                         Environment.Exit(0);
                     }
