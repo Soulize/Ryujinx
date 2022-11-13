@@ -10,11 +10,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
         public StructuredFunction CurrentFunction { get; set; }
 
-        public StructuredProgramInfo Info { get; }
-
         public ShaderConfig Config { get; }
 
         public OperandManager OperandManager { get; }
+
+        private readonly StructuredProgramInfo _info;
 
         private readonly StringBuilder _sb;
 
@@ -24,7 +24,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
         public CodeGenContext(StructuredProgramInfo info, ShaderConfig config)
         {
-            Info = info;
+            _info = info;
             Config = config;
 
             OperandManager = new OperandManager();
@@ -72,7 +72,19 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
 
         public StructuredFunction GetFunction(int id)
         {
-            return Info.Functions[id];
+            return _info.Functions[id];
+        }
+
+        public TransformFeedbackOutput GetTransformFeedbackOutput(int location, int component)
+        {
+            int index = (AttributeConsts.UserAttributeBase / 4) + location * 4 + component;
+            return _info.TransformFeedbackOutputs[index];
+        }
+
+        public TransformFeedbackOutput GetTransformFeedbackOutput(int location)
+        {
+            int index = location / 4;
+            return _info.TransformFeedbackOutputs[index];
         }
 
         private void UpdateIndentation()
