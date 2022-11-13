@@ -13,7 +13,6 @@ using Ryujinx.Common.SystemInfo;
 using Ryujinx.Modules;
 using Ryujinx.Ui.Common;
 using Ryujinx.Ui.Common.Configuration;
-using Ryujinx.Ui.Common.Helper;
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -27,6 +26,7 @@ namespace Ryujinx.Ava
         public static double ActualScaleFactor { get; set; }
         public static string Version { get; private set; }
         public static string ConfigurationPath { get; private set; }
+        public static string CommandLineProfile { get; set; }
         public static bool PreviewerDetached { get; private set; }
 
         public static RenderTimer RenderTimer { get; private set; }
@@ -87,8 +87,46 @@ namespace Ryujinx.Ava
 
         private static void Initialize(string[] args)
         {
-            // Parse arguments
-            CommandLineState.ParseArguments(args);
+            // Parse Arguments.
+            string launchPathArg = null;
+            string baseDirPathArg = null;
+            bool startFullscreenArg = false;
+
+            for (int i = 0; i < args.Length; ++i)
+            {
+                string arg = args[i];
+
+                if (arg == "-r" || arg == "--root-data-dir")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        Logger.Error?.Print(LogClass.Application, $"Invalid option '{arg}'");
+
+                        continue;
+                    }
+
+                    baseDirPathArg = args[++i];
+                }
+                else if (arg == "-p" || arg == "--profile")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        Logger.Error?.Print(LogClass.Application, $"Invalid option '{arg}'");
+
+                        continue;
+                    }
+
+                    CommandLineProfile = args[++i];
+                }
+                else if (arg == "-f" || arg == "--fullscreen")
+                {
+                    startFullscreenArg = true;
+                }
+                else
+                {
+                    launchPathArg = arg;
+                }
+            }
 
             // Delete backup files after updating.
             Task.Run(Updater.CleanupUpdate);
@@ -97,10 +135,10 @@ namespace Ryujinx.Ava
 
             // Hook unhandled exception and process exit events.
             AppDomain.CurrentDomain.UnhandledException += (object sender, UnhandledExceptionEventArgs e) => ProcessUnhandledException(e.ExceptionObject as Exception, e.IsTerminating);
-            AppDomain.CurrentDomain.ProcessExit        += (object sender, EventArgs e)                   => Exit();
+            AppDomain.CurrentDomain.ProcessExit += (object sender, EventArgs e) => Exit();
 
             // Setup base data directory.
-            AppDataManager.Initialize(CommandLineState.BaseDirPathArg);
+            AppDataManager.Initialize(baseDirPathArg);
 
             // Initialize the configuration.
             ConfigurationState.Initialize();
@@ -135,9 +173,9 @@ namespace Ryujinx.Ava
                 }
             }
 
-            if (CommandLineState.LaunchPathArg != null)
+            if (launchPathArg != null)
             {
-                MainWindow.DeferLoadApplication(CommandLineState.LaunchPathArg, CommandLineState.StartFullscreenArg);
+                MainWindow.DeferLoadApplication(launchPathArg, startFullscreenArg);
             }
         }
 
@@ -175,19 +213,6 @@ namespace Ryujinx.Ava
                     ConfigurationState.Instance.LoadDefault();
 
                     Logger.Warning?.PrintMsg(LogClass.Application, $"Failed to load config! Loading the default config instead.\nFailed config location {ConfigurationPath}");
-                }
-            }
-
-            // Check if graphics backend was overridden
-            if (CommandLineState.OverrideGraphicsBackend != null)
-            {
-                if (CommandLineState.OverrideGraphicsBackend.ToLower() == "opengl")
-                {
-                    ConfigurationState.Instance.Graphics.GraphicsBackend.Value = GraphicsBackend.OpenGl;
-                }
-                else if (CommandLineState.OverrideGraphicsBackend.ToLower() == "vulkan")
-                {
-                    ConfigurationState.Instance.Graphics.GraphicsBackend.Value = GraphicsBackend.Vulkan;
                 }
             }
         }

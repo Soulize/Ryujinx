@@ -23,7 +23,6 @@ using Ryujinx.Modules;
 using Ryujinx.Ui.App.Common;
 using Ryujinx.Ui.Common;
 using Ryujinx.Ui.Common.Configuration;
-using Ryujinx.Ui.Common.Helper;
 using SixLabors.ImageSharp.PixelFormats;
 using System;
 using System.ComponentModel;
@@ -248,7 +247,7 @@ namespace Ryujinx.Ava.Ui.Windows
             {
                 RendererControl.CreateVulkan();
             }
-
+            
             AppHost = new AppHost(RendererControl, InputManager, path, VirtualFileSystem, ContentManager, AccountManager, _userChannelPersistence, this);
 
             if (!AppHost.LoadGuestApplication().Result)
@@ -433,7 +432,7 @@ namespace Ryujinx.Ava.Ui.Windows
             // Consider removing this at some point in the future when we don't need to worry about old saves.
             VirtualFileSystem.FixExtraData(LibHacHorizonManager.RyujinxClient);
 
-            AccountManager = new AccountManager(LibHacHorizonManager.RyujinxClient, CommandLineState.Profile);
+            AccountManager = new AccountManager(LibHacHorizonManager.RyujinxClient, Program.CommandLineProfile);
 
             VirtualFileSystem.ReloadKeySet();
 
