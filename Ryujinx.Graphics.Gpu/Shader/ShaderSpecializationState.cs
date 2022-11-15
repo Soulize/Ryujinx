@@ -520,6 +520,16 @@ namespace Ryujinx.Graphics.Gpu.Shader
                 return false;
             }
 
+            if (graphicsState.HasConstantBufferDrawParameters != GraphicsState.HasConstantBufferDrawParameters)
+            {
+                return false;
+            }
+
+            if (graphicsState.HasUnalignedStorageBuffer != GraphicsState.HasUnalignedStorageBuffer)
+            {
+                return false;
+            }
+
             return Matches(channel, poolState, checkTextures, isCompute: false);
         }
 
@@ -528,10 +538,16 @@ namespace Ryujinx.Graphics.Gpu.Shader
         /// </summary>
         /// <param name="channel">GPU channel</param>
         /// <param name="poolState">Texture pool state</param>
+        /// <param name="computeState">Compute state</param>
         /// <param name="checkTextures">Indicates whether texture descriptors should be checked</param>
         /// <returns>True if the state matches, false otherwise</returns>
-        public bool MatchesCompute(GpuChannel channel, GpuChannelPoolState poolState, bool checkTextures)
+        public bool MatchesCompute(GpuChannel channel, GpuChannelPoolState poolState, GpuChannelComputeState computeState, bool checkTextures)
         {
+            if (computeState.HasUnalignedStorageBuffer != ComputeState.HasUnalignedStorageBuffer)
+            {
+                return false;
+            }
+
             return Matches(channel, poolState, checkTextures, isCompute: true);
         }
 
@@ -552,11 +568,11 @@ namespace Ryujinx.Graphics.Gpu.Shader
         private static void UpdateCachedBuffer(
             GpuChannel channel,
             bool isCompute,
-            ref int cachedTextureBufferIndex,
-            ref int cachedSamplerBufferIndex,
-            ref ReadOnlySpan<int> cachedTextureBuffer,
-            ref ReadOnlySpan<int> cachedSamplerBuffer,
-            ref int cachedStageIndex,
+            scoped ref int cachedTextureBufferIndex,
+            scoped ref int cachedSamplerBufferIndex,
+            scoped ref ReadOnlySpan<int> cachedTextureBuffer,
+            scoped ref ReadOnlySpan<int> cachedSamplerBuffer,
+            scoped ref int cachedStageIndex,
             int textureBufferIndex,
             int samplerBufferIndex,
             int stageIndex)
