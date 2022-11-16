@@ -10,7 +10,7 @@ using VkFormat = Silk.NET.Vulkan.Format;
 
 namespace Ryujinx.Graphics.Vulkan
 {
-    class BufferHolder : IDisposable, IMirrorable<DisposableBuffer>
+    class BufferHolder : IDisposable, IMirrorable<DisposableBuffer>, IMirrorable<DisposableBufferView>
     {
         private const int MaxUpdateBufferSize = 0x10000;
 
@@ -259,7 +259,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             (_swapActions ??= new List<Action>()).Add(invalidateView);
 
-            return new Auto<DisposableBufferView>(new DisposableBufferView(_gd.Api, _device, bufferView), _waitable, _buffer);
+            return new Auto<DisposableBufferView>(new DisposableBufferView(_gd.Api, _device, bufferView), this, _waitable, _buffer);
         }
 
         public void InheritMetrics(BufferHolder other)
@@ -423,6 +423,13 @@ namespace Ryujinx.Graphics.Vulkan
             }
 
             return _buffer;
+        }
+
+        Auto<DisposableBufferView> IMirrorable<DisposableBufferView>.GetMirrorable(CommandBufferScoped cbs, ref int offset, int size)
+        {
+            // Cannot mirror buffer views right now.
+
+            throw new NotImplementedException();
         }
 
         public void ClearMirrors()

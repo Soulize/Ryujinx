@@ -129,27 +129,27 @@ namespace Ryujinx.Graphics.Vulkan
             ReleaseImpl();
         }
 
-        public BufferView GetBufferView(CommandBufferScoped cbs)
+        public BufferView GetBufferView(CommandBufferScoped cbs, bool write)
         {
             if (_bufferView == null)
             {
                 _bufferView = _gd.BufferManager.CreateView(_bufferHandle, VkFormat, _offset, _size, ReleaseImpl);
             }
 
-            return _bufferView?.Get(cbs, _offset, _size).Value ?? default;
+            return _bufferView?.Get(cbs, _offset, _size, write).Value ?? default;
         }
 
-        public BufferView GetBufferView(CommandBufferScoped cbs, GAL.Format format)
+        public BufferView GetBufferView(CommandBufferScoped cbs, GAL.Format format, bool write)
         {
             var vkFormat = FormatTable.GetFormat(format);
             if (vkFormat == VkFormat)
             {
-                return GetBufferView(cbs);
+                return GetBufferView(cbs, write);
             }
 
             if (_selfManagedViews != null && _selfManagedViews.TryGetValue(format, out var bufferView))
             {
-                return bufferView.Get(cbs, _offset, _size).Value;
+                return bufferView.Get(cbs, _offset, _size, write).Value;
             }
 
             bufferView = _gd.BufferManager.CreateView(_bufferHandle, vkFormat, _offset, _size, ReleaseImpl);
@@ -159,7 +159,7 @@ namespace Ryujinx.Graphics.Vulkan
                 (_selfManagedViews ??= new Dictionary<GAL.Format, Auto<DisposableBufferView>>()).Add(format, bufferView);
             }
 
-            return bufferView?.Get(cbs, _offset, _size).Value ?? default;
+            return bufferView?.Get(cbs, _offset, _size, write).Value ?? default;
         }
     }
 }

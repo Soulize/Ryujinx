@@ -624,7 +624,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                             for (int i = 0; i < count; i++)
                             {
-                                bufferTextures[i] = _bufferTextureRefs[binding + i]?.GetBufferView(cbs) ?? default;
+                                bufferTextures[i] = _bufferTextureRefs[binding + i]?.GetBufferView(cbs, false) ?? default;
                             }
 
                             dsc.UpdateBufferImages(0, binding, bufferTextures.Slice(0, count), DescriptorType.UniformTexelBuffer);
@@ -649,7 +649,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                             for (int i = 0; i < count; i++)
                             {
-                                bufferImages[i] = _bufferImageRefs[binding + i]?.GetBufferView(cbs, _bufferImageFormats[binding + i]) ?? default;
+                                bufferImages[i] = _bufferImageRefs[binding + i]?.GetBufferView(cbs, _bufferImageFormats[binding + i], true) ?? default;
                             }
 
                             dsc.UpdateBufferImages(0, binding, bufferImages.Slice(0, count), DescriptorType.StorageTexelBuffer);
