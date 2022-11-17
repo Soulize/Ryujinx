@@ -20,7 +20,7 @@ namespace Ryujinx.Graphics.Vulkan
 
     interface IMirrorable<T> where T : IDisposable
     {
-        Auto<T> GetMirrorable(CommandBufferScoped cbs, ref int offset, int size);
+        Auto<T> GetMirrorable(CommandBufferScoped cbs, ref int offset, int size, out bool mirrored);
         void ClearMirrors(CommandBufferScoped cbs, int offset, int size);
     }
 
@@ -60,9 +60,10 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
-        public T GetMirrorable(CommandBufferScoped cbs, ref int offset, int size)
+        public T GetMirrorable(CommandBufferScoped cbs, ref int offset, int size, out bool mirrored)
         {
-            var mirror = _mirrorable?.GetMirrorable(cbs, ref offset, size);
+            mirrored = false;
+            var mirror = _mirrorable?.GetMirrorable(cbs, ref offset, size, out mirrored);
             mirror._waitable?.AddBufferUse(cbs.CommandBufferIndex, offset, size, false);
             return mirror.Get(cbs);
         }

@@ -1,4 +1,5 @@
-﻿using Ryujinx.Graphics.GAL;
+﻿using Ryujinx.Common.Memory;
+using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Shader;
 using Silk.NET.Vulkan;
 using System;
@@ -56,9 +57,12 @@ namespace Ryujinx.Graphics.Vulkan
         private BufferView[] _bufferTextures;
         private BufferView[] _bufferImages;
 
-        private bool[] _uniformSet;
-        private bool[] _storageSet;
         private Silk.NET.Vulkan.Buffer _cachedSupportBuffer;
+
+        private BitMapStruct<Array2<long>> _uniformSet;
+        private BitMapStruct<Array2<long>> _storageSet;
+        private BitMapStruct<Array2<long>> _uniformMirrored;
+        private BitMapStruct<Array2<long>> _storageMirrored;
 
         [Flags]
         private enum DirtyFlags
@@ -108,9 +112,6 @@ namespace Ryujinx.Graphics.Vulkan
 
             _textures.AsSpan().Fill(initialImageInfo);
             _images.AsSpan().Fill(initialImageInfo);
-
-            _uniformSet = new bool[Constants.MaxUniformBufferBindings];
-            _storageSet = new bool[Constants.MaxStorageBufferBindings];
 
             if (gd.Capabilities.SupportsNullDescriptors)
             {
@@ -178,67 +179,53 @@ namespace Ryujinx.Graphics.Vulkan
 
             if (_uniformBufferRefs[0].Buffer == buffer)
             {
-                _uniformSet[0] = false;
+                _uniformSet.Clear(0);
                 SignalDirty(DirtyFlags.Uniform);
             }
 
             // Check stage bindings
 
-            int uniformStagesCount = _program.Bindings[PipelineBase.UniformSetIndex].Length;
-
-            for (int i = 0; i < uniformStagesCount; i++)
+            _uniformMirrored.Union(_uniformSet).SignalSet((int binding, int count) =>
             {
-                int[] stageBindings = _program.Bindings[PipelineBase.UniformSetIndex][i];
-
-                for (int j = 0; j < stageBindings.Length; j++)
+                for (int i = 0; i < count; i++)
                 {
-                    int binding = stageBindings[j];
-
-                    if (binding < _uniformBufferRefs.Length)
+                    ref BufferRef bufferRef = ref _uniformBufferRefs[binding];
+                    if (bufferRef.Buffer == buffer)
                     {
-                        ref BufferRef bufferRef = ref _uniformBufferRefs[binding];
-                        if (bufferRef.Buffer == buffer)
-                        {
-                            ref DescriptorBufferInfo info = ref _uniformBuffers[binding];
-                            int bindingOffset = bufferRef.Offset;
+                        ref DescriptorBufferInfo info = ref _uniformBuffers[binding];
+                        int bindingOffset = bufferRef.Offset;
 
-                            if (BindingOverlaps(ref info, bindingOffset, offset, size))
-                            {
-                                _uniformSet[binding] = false;
-                                SignalDirty(DirtyFlags.Uniform);
-                            }
+                        if (BindingOverlaps(ref info, bindingOffset, offset, size))
+                        {
+                            _uniformSet.Clear(binding);
+                            SignalDirty(DirtyFlags.Uniform);
                         }
                     }
+
+                    binding++;
                 }
-            }
+            });
 
-            int storageStagesCount = _program.Bindings[PipelineBase.StorageSetIndex].Length;
-
-            for (int i = 0; i < storageStagesCount; i++)
+            _storageMirrored.Union(_storageSet).SignalSet((int binding, int count) =>
             {
-                int[] stageBindings = _program.Bindings[PipelineBase.StorageSetIndex][i];
-
-                for (int j = 0; j < stageBindings.Length; j++)
+                for (int i = 0; i < count; i++)
                 {
-                    int binding = stageBindings[j];
-
-                    if (binding < _storageBufferRefs.Length)
+                    ref BufferRef bufferRef = ref _storageBufferRefs[binding];
+                    if (bufferRef.Buffer == buffer)
                     {
-                        ref BufferRef bufferRef = ref _storageBufferRefs[binding];
-                        if (bufferRef.Buffer == buffer)
-                        {
-                            ref DescriptorBufferInfo info = ref _storageBuffers[binding];
-                            int bindingOffset = bufferRef.Offset;
+                        ref DescriptorBufferInfo info = ref _storageBuffers[binding];
+                        int bindingOffset = bufferRef.Offset;
 
-                            if (BindingOverlaps(ref info, bindingOffset, offset, size))
-                            {
-                                _storageSet[binding] = false;
-                                SignalDirty(DirtyFlags.Storage);
-                            }
+                        if (BindingOverlaps(ref info, bindingOffset, offset, size))
+                        {
+                            _storageSet.Clear(binding);
+                            SignalDirty(DirtyFlags.Storage);
                         }
                     }
+
+                    binding++;
                 }
-            }
+            });
         }
 
         public void SetProgram(ShaderCollection program)
@@ -301,7 +288,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (!currentBufferRef.Equals(newRef) || currentInfo.Range != info.Range)
                 {
-                    _storageSet[index] = false;
+                    _storageSet.Clear(index);
 
                     currentInfo = info;
                     currentBufferRef = newRef;
@@ -332,7 +319,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (!currentBufferRef.Equals(newRef) || currentInfo.Range != info.Range)
                 {
-                    _storageSet[index] = false;
+                    _storageSet.Clear(index);
 
                     currentInfo = info;
                     currentBufferRef = newRef;
@@ -391,7 +378,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 if (!currentBufferRef.Equals(newRef) || currentInfo.Range != info.Range)
                 {
-                    _uniformSet[index] = false;
+                    _uniformSet.Clear(index);
 
                     currentInfo = info;
                     currentBufferRef = newRef;
@@ -444,7 +431,7 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void UpdateBuffer(
+        private static bool UpdateBuffer(
             CommandBufferScoped cbs,
             ref DescriptorBufferInfo info,
             ref BufferRef buffer,
@@ -452,10 +439,11 @@ namespace Ryujinx.Graphics.Vulkan
             bool mirrorable)
         {
             int offset = buffer.Offset;
+            bool mirrored = false;
 
             if (mirrorable)
             {
-                info.Buffer = buffer.Buffer?.GetMirrorable(cbs, ref offset, (int)info.Range).Value ?? default;
+                info.Buffer = buffer.Buffer?.GetMirrorable(cbs, ref offset, (int)info.Range, out mirrored).Value ?? default;
             }
             else
             {
@@ -471,6 +459,8 @@ namespace Ryujinx.Graphics.Vulkan
                 info.Offset = 0;
                 info.Range = Vk.WholeSize;
             }
+
+            return mirrored;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -501,13 +491,12 @@ namespace Ryujinx.Graphics.Vulkan
                     int supportBufferOffset = 0;
                     ref var supportRef = ref _uniformBufferRefs[0];
 
-                    if (!_uniformSet[0])
+                    if (_uniformSet.Set(0))
                     {
                         var buffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, _pipeline.SupportBufferUpdater.Handle, false);
-                        _cachedSupportBuffer = buffer.GetMirrorable(cbs, ref supportBufferOffset, SupportBuffer.RequiredSize).Value;
+                        _cachedSupportBuffer = buffer.GetMirrorable(cbs, ref supportBufferOffset, SupportBuffer.RequiredSize, out _).Value;
                         supportRef.Buffer = buffer;
                         supportRef.Offset = supportBufferOffset;
-                        _uniformSet[0] = true;
                     }
                     else
                     {
@@ -549,11 +538,11 @@ namespace Ryujinx.Graphics.Vulkan
 
                             ref BufferRef buffer = ref _uniformBufferRefs[index];
 
-                            if (!_uniformSet[index])
+                            if (_uniformSet.Set(index))
                             {
-                                UpdateBuffer(cbs, ref _uniformBuffers[index], ref buffer, dummyBuffer, true);
+                                bool mirrored = UpdateBuffer(cbs, ref _uniformBuffers[index], ref buffer, dummyBuffer, true);
 
-                                _uniformSet[index] = true;
+                                _uniformMirrored.Set(index, mirrored);
                             }
                         }
 
@@ -568,17 +557,27 @@ namespace Ryujinx.Graphics.Vulkan
 
                             ref BufferRef buffer = ref _storageBufferRefs[index];
 
-                            if (!_storageSet[index])
+                            /*
+                            if (isMoltenVk)
+                            {
+                                if (buffer.Buffer?.MVKStageChanged(mvkStages, renderPassId) ?? false)
+                                {
+                                    _pipeline.EndRenderPass();
+                                }
+                            }
+                            */
+
+                            if (_storageSet.Set(index))
                             {
                                 ref var info = ref _storageBuffers[index];
 
-                                UpdateBuffer(cbs,
+                                bool mirrored = UpdateBuffer(cbs,
                                     ref info,
                                     ref _storageBufferRefs[index],
                                     dummyBuffer,
                                     !buffer.Write && info.Range <= (ulong)StorageBufferMaxMirrorable);
 
-                                _storageSet[index] = true;
+                                _storageMirrored.Set(index, mirrored);
                             }
                         }
 
@@ -696,7 +695,7 @@ namespace Ryujinx.Graphics.Vulkan
             var dummyBuffer = _dummyBuffer?.GetBuffer();
             int stagesCount = _program.Bindings[PipelineBase.UniformSetIndex].Length;
 
-            if (!_uniformSet[0])
+            if (_uniformSet.Set(0))
             {
                 Span<DescriptorBufferInfo> uniformBuffer = stackalloc DescriptorBufferInfo[1];
 
@@ -706,8 +705,6 @@ namespace Ryujinx.Graphics.Vulkan
                     Range = (ulong)SupportBuffer.RequiredSize,
                     Buffer = _gd.BufferManager.GetBuffer(cbs.CommandBuffer, _pipeline.SupportBufferUpdater.Handle, false).Get(cbs, 0, SupportBuffer.RequiredSize).Value
                 };
-
-                _uniformSet[0] = true;
 
                 UpdateBuffers(cbs, pbp, 0, uniformBuffer, DescriptorType.UniformBuffer);
             }
@@ -736,10 +733,9 @@ namespace Ryujinx.Graphics.Vulkan
 
                         ref BufferRef buffer = ref _uniformBufferRefs[index];
 
-                        if (!_uniformSet[index])
+                        if (_uniformSet.Set(index))
                         {
                             UpdateBuffer(cbs, ref _uniformBuffers[index], ref buffer, dummyBuffer, true);
-                            _uniformSet[index] = true;
                             doUpdate = true;
                         }
                     }
@@ -790,8 +786,8 @@ namespace Ryujinx.Graphics.Vulkan
         {
             _dirty = DirtyFlags.All;
 
-            Array.Clear(_uniformSet);
-            Array.Clear(_storageSet);
+            _uniformSet.Clear();
+            _storageSet.Clear();
         }
 
         private void SwapBuffer(BufferRef[] list, Auto<DisposableBuffer> from, Auto<DisposableBuffer> to)

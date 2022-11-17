@@ -91,7 +91,7 @@ namespace Ryujinx.Graphics.Vulkan
             if (autoBuffer != null)
             {
                 int offset = _offset;
-                var buffer = autoBuffer.GetMirrorable(cbs, ref offset, _size).Value;
+                var buffer = autoBuffer.GetMirrorable(cbs, ref offset, _size, out _).Value;
 
                 updater.BindVertexBuffer(cbs, binding, buffer, (ulong)offset, (ulong)_size, (ulong)_stride);
             }
