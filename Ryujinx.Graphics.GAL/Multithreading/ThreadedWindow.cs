@@ -32,11 +32,5 @@ namespace Ryujinx.Graphics.GAL.Multithreading
         }
 
         public void ChangeVSyncMode(bool vsyncEnabled) { }
-
-        public void SetAntiAliasing(AntiAliasing effect) { }
-
-        public void SetUpscaler(UpscaleType type) { }
-
-        public void SetUpscalerLevel(float level) { }
     }
 }
