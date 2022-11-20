@@ -38,11 +38,8 @@ namespace Ryujinx.Graphics.Vulkan
 
         public void Dispose()
         {
-            if (Pointer != null)
-            {
-                Marshal.FreeHGlobal((IntPtr)Pointer);
-                Pointer = null;
-            }
+            Marshal.FreeHGlobal((IntPtr)Pointer);
+            Pointer = null;
         }
     }
 }
