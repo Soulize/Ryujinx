@@ -453,6 +453,10 @@ namespace Ryujinx.Graphics.Vulkan
                 return;
             }
 
+            var buffer = Gd.BufferManager
+                .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
+
             UpdateIndexBufferPattern();
             RecreatePipelineIfNeeded(PipelineBindPoint.Graphics);
             BeginRenderPass();
@@ -482,10 +486,6 @@ namespace Ryujinx.Graphics.Vulkan
             }
             else
             {
-                var buffer = Gd.BufferManager
-                    .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
-                    .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
-
                 ResumeTransformFeedbackInternal();
 
                 Gd.Api.CmdDrawIndexedIndirect(CommandBuffer, buffer, (ulong)indirectBuffer.Offset, 1, (uint)indirectBuffer.Size);
@@ -499,14 +499,18 @@ namespace Ryujinx.Graphics.Vulkan
                 return;
             }
 
+            var countBuffer = Gd.BufferManager
+                .GetBuffer(CommandBuffer, parameterBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, false)
+                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size).Value;
+
+            var buffer = Gd.BufferManager
+                .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
+
             UpdateIndexBufferPattern();
             RecreatePipelineIfNeeded(PipelineBindPoint.Graphics);
             BeginRenderPass();
             DrawCount++;
-
-            var countBuffer = Gd.BufferManager
-                .GetBuffer(CommandBuffer, parameterBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, false)
-                .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size).Value;
 
             if (_indexBufferPattern != null)
             {
@@ -551,14 +555,9 @@ namespace Ryujinx.Graphics.Vulkan
                         (uint)maxDrawCount,
                         (uint)stride);
                 }
-
             }
             else
             {
-                var buffer = Gd.BufferManager
-                    .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
-                    .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size).Value;
-
                 ResumeTransformFeedbackInternal();
 
                 if (Gd.Capabilities.SupportsIndirectParameters)
@@ -594,14 +593,14 @@ namespace Ryujinx.Graphics.Vulkan
 
             // TODO: Support quads and other unsupported topologies.
 
+            var buffer = Gd.BufferManager
+                .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
+                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, false).Value;
+
             RecreatePipelineIfNeeded(PipelineBindPoint.Graphics);
             BeginRenderPass();
             ResumeTransformFeedbackInternal();
             DrawCount++;
-
-            var buffer = Gd.BufferManager
-                .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
-                .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, false).Value;
 
             Gd.Api.CmdDrawIndirect(CommandBuffer, buffer, (ulong)indirectBuffer.Offset, 1, (uint)indirectBuffer.Size);
         }
@@ -619,13 +618,6 @@ namespace Ryujinx.Graphics.Vulkan
                 return;
             }
 
-            // TODO: Support quads and other unsupported topologies.
-
-            RecreatePipelineIfNeeded(PipelineBindPoint.Graphics);
-            BeginRenderPass();
-            ResumeTransformFeedbackInternal();
-            DrawCount++;
-
             var buffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, indirectBuffer.Handle, indirectBuffer.Offset, indirectBuffer.Size, false)
                 .Get(Cbs, indirectBuffer.Offset, indirectBuffer.Size, false).Value;
@@ -633,6 +625,13 @@ namespace Ryujinx.Graphics.Vulkan
             var countBuffer = Gd.BufferManager
                 .GetBuffer(CommandBuffer, parameterBuffer.Handle, parameterBuffer.Offset, parameterBuffer.Size, false)
                 .Get(Cbs, parameterBuffer.Offset, parameterBuffer.Size, false).Value;
+
+            // TODO: Support quads and other unsupported topologies.
+
+            RecreatePipelineIfNeeded(PipelineBindPoint.Graphics);
+            BeginRenderPass();
+            ResumeTransformFeedbackInternal();
+            DrawCount++;
 
             Gd.DrawIndirectCountApi.CmdDrawIndirectCount(
                 CommandBuffer,
