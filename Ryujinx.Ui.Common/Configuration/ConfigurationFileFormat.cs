@@ -14,7 +14,7 @@ namespace Ryujinx.Ui.Common.Configuration
         /// <summary>
         /// The current version of the file format
         /// </summary>
-        public const int CurrentVersion = 41;
+        public const int CurrentVersion = 43;
 
         /// <summary>
         /// Version of the configuration file format
@@ -50,6 +50,21 @@ namespace Ryujinx.Ui.Common.Configuration
         /// Aspect Ratio applied to the renderer window.
         /// </summary>
         public AspectRatio AspectRatio { get; set; }
+
+        /// <summary>
+        /// Applies anti-aliasing to the renderer.
+        /// </summary>
+        public AntiAliasing AntiAliasing { get; set; }
+
+        /// <summary>
+        /// Sets the framebuffer upscaling type.
+        /// </summary>
+        public UpscaleType UpscaleType { get; set; }
+
+        /// <summary>
+        /// Sets the framebuffer upscaling level.
+        /// </summary>
+        public float UpscaleLevel { get; set; }
 
         /// <summary>
         /// Dumps shaders in this local directory
@@ -167,6 +182,11 @@ namespace Ryujinx.Ui.Common.Configuration
         public bool EnableTextureRecompression { get; set; }
 
         /// <summary>
+        /// Enables or disables Macro high-level emulation
+        /// </summary>
+        public bool EnableMacroHLE { get; set; }
+
+        /// <summary>
         /// Enables or disables profiled translation cache persistency
         /// </summary>
         public bool EnablePtc { get; set; }
@@ -202,7 +222,7 @@ namespace Ryujinx.Ui.Common.Configuration
         public MemoryManagerMode MemoryManagerMode { get; set; }
 
         /// <summary>
-        /// Expands the RAM amount on the emulated system from 4GB to 6GB
+        /// Expands the RAM amount on the emulated system from 4GiB to 6GiB
         /// </summary>
         public bool ExpandRam { get; set; }
 

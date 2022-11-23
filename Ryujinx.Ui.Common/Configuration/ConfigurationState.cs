@@ -417,9 +417,29 @@ namespace Ryujinx.Ui.Common.Configuration
             public ReactiveObject<bool> EnableTextureRecompression { get; private set; }
 
             /// <summary>
+            /// Enables or disables Macro high-level emulation
+            /// </summary>
+            public ReactiveObject<bool> EnableMacroHLE { get; private set; }
+
+            /// <summary>
             /// Graphics backend
             /// </summary>
             public ReactiveObject<GraphicsBackend> GraphicsBackend { get; private set; }
+
+            /// <summary>
+            /// Applies anti-aliasing to the renderer.
+            /// </summary>
+            public ReactiveObject<AntiAliasing> AntiAliasing { get; private set; }
+
+            /// <summary>
+            /// Sets the framebuffer upscaling type.
+            /// </summary>
+            public ReactiveObject<UpscaleType> UpscaleType { get; private set; }
+
+            /// <summary>
+            /// Sets the framebuffer upscaling level.
+            /// </summary>
+            public ReactiveObject<float> UpscaleLevel { get; private set; }
 
             /// <summary>
             /// Preferred GPU
@@ -449,6 +469,14 @@ namespace Ryujinx.Ui.Common.Configuration
                 GraphicsBackend.Event            += static (sender, e) => LogValueChange(sender, e, nameof(GraphicsBackend));
                 PreferredGpu                     = new ReactiveObject<string>();
                 PreferredGpu.Event               += static (sender, e) => LogValueChange(sender, e, nameof(PreferredGpu));
+                EnableMacroHLE                   = new ReactiveObject<bool>();
+                EnableMacroHLE.Event             += static (sender, e) => LogValueChange(sender, e, nameof(EnableMacroHLE));
+                AntiAliasing                     = new ReactiveObject<AntiAliasing>();
+                AntiAliasing.Event               += static (sender, e) => LogValueChange(sender, e, nameof(AntiAliasing));
+                UpscaleType                      = new ReactiveObject<UpscaleType>();
+                UpscaleType.Event                += static (sender, e) => LogValueChange(sender, e, nameof(UpscaleType));
+                UpscaleLevel                     = new ReactiveObject<float>();
+                UpscaleLevel.Event               += static (sender, e) => LogValueChange(sender, e, nameof(UpscaleLevel));
             }
         }
 
@@ -526,6 +554,9 @@ namespace Ryujinx.Ui.Common.Configuration
                 ResScaleCustom             = Graphics.ResScaleCustom,
                 MaxAnisotropy              = Graphics.MaxAnisotropy,
                 AspectRatio                = Graphics.AspectRatio,
+                AntiAliasing               = Graphics.AntiAliasing,
+                UpscaleType                = Graphics.UpscaleType,
+                UpscaleLevel               = Graphics.UpscaleLevel,
                 GraphicsShadersDumpPath    = Graphics.ShadersDumpPath,
                 LoggingEnableDebug         = Logger.EnableDebug,
                 LoggingEnableStub          = Logger.EnableStub,
@@ -549,6 +580,7 @@ namespace Ryujinx.Ui.Common.Configuration
                 EnableVsync                = Graphics.EnableVsync,
                 EnableShaderCache          = Graphics.EnableShaderCache,
                 EnableTextureRecompression = Graphics.EnableTextureRecompression,
+                EnableMacroHLE             = Graphics.EnableMacroHLE,
                 EnablePtc                  = System.EnablePtc,
                 EnableInternetAccess       = System.EnableInternetAccess,
                 EnableFsIntegrityChecks    = System.EnableFsIntegrityChecks,
@@ -634,6 +666,10 @@ namespace Ryujinx.Ui.Common.Configuration
             Graphics.EnableVsync.Value                = true;
             Graphics.EnableShaderCache.Value          = true;
             Graphics.EnableTextureRecompression.Value = false;
+            Graphics.EnableMacroHLE.Value             = true;
+            Graphics.AntiAliasing.Value               = AntiAliasing.None;
+            Graphics.UpscaleType.Value                = UpscaleType.Bilinear;
+            Graphics.UpscaleLevel.Value               = 0.3f;
             System.EnablePtc.Value                    = true;
             System.EnableInternetAccess.Value         = false;
             System.EnableFsIntegrityChecks.Value      = true;
@@ -1176,6 +1212,24 @@ namespace Ryujinx.Ui.Common.Configuration
                 };
             }
 
+            if (configurationFileFormat.Version < 42)
+            {
+                Ryujinx.Common.Logging.Logger.Warning?.Print(LogClass.Application, $"Outdated configuration version {configurationFileFormat.Version}, migrating to version 42.");
+
+                configurationFileFormat.EnableMacroHLE = true;
+            }
+
+            if (configurationFileFormat.Version < 43)
+            {
+                Ryujinx.Common.Logging.Logger.Warning?.Print(LogClass.Application, $"Outdated configuration version {configurationFileFormat.Version}, migrating to version 42.");
+
+                configurationFileFormat.AntiAliasing = AntiAliasing.None;
+                configurationFileFormat.UpscaleType = UpscaleType.Bilinear;
+                configurationFileFormat.UpscaleLevel = 0.3f;
+
+                configurationFileUpdated = true;
+            }
+
             Logger.EnableFileLog.Value                = configurationFileFormat.EnableFileLog;
             Graphics.ResScale.Value                   = configurationFileFormat.ResScale;
             Graphics.ResScaleCustom.Value             = configurationFileFormat.ResScaleCustom;
@@ -1185,6 +1239,9 @@ namespace Ryujinx.Ui.Common.Configuration
             Graphics.BackendThreading.Value           = configurationFileFormat.BackendThreading;
             Graphics.GraphicsBackend.Value            = configurationFileFormat.GraphicsBackend;
             Graphics.PreferredGpu.Value               = configurationFileFormat.PreferredGpu;
+            Graphics.AntiAliasing.Value               = configurationFileFormat.AntiAliasing;
+            Graphics.UpscaleType.Value                = configurationFileFormat.UpscaleType;
+            Graphics.UpscaleLevel.Value               = configurationFileFormat.UpscaleLevel;
             Logger.EnableDebug.Value                  = configurationFileFormat.LoggingEnableDebug;
             Logger.EnableStub.Value                   = configurationFileFormat.LoggingEnableStub;
             Logger.EnableInfo.Value                   = configurationFileFormat.LoggingEnableInfo;
@@ -1207,6 +1264,7 @@ namespace Ryujinx.Ui.Common.Configuration
             Graphics.EnableVsync.Value                = configurationFileFormat.EnableVsync;
             Graphics.EnableShaderCache.Value          = configurationFileFormat.EnableShaderCache;
             Graphics.EnableTextureRecompression.Value = configurationFileFormat.EnableTextureRecompression;
+            Graphics.EnableMacroHLE.Value             = configurationFileFormat.EnableMacroHLE;
             System.EnablePtc.Value                    = configurationFileFormat.EnablePtc;
             System.EnableInternetAccess.Value         = configurationFileFormat.EnableInternetAccess;
             System.EnableFsIntegrityChecks.Value      = configurationFileFormat.EnableFsIntegrityChecks;

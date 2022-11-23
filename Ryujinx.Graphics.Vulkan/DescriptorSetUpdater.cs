@@ -130,6 +130,12 @@ namespace Ryujinx.Graphics.Vulkan
                 1f));
         }
 
+        public void Initialize()
+        {
+            Span<byte> dummyTextureData = stackalloc byte[4];
+            _dummyTexture.SetData(dummyTextureData);
+        }
+
         public void SetProgram(ShaderCollection program)
         {
             _program = program;
@@ -153,6 +159,18 @@ namespace Ryujinx.Graphics.Vulkan
                 _bufferImageRefs[binding] = null;
                 _bufferImageFormats[binding] = default;
             }
+
+            SignalDirty(DirtyFlags.Image);
+        }
+
+        public void SetImage(int binding, Auto<DisposableImageView> image, GAL.Format imageFormat)
+        {
+            if (image == null)
+            {
+                return;
+            }
+
+            _imageRefs[binding] = image;
 
             SignalDirty(DirtyFlags.Image);
         }
