@@ -5,6 +5,7 @@ using Ryujinx.HLE.Utilities;
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -39,7 +40,7 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
             new int[] { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 }
         };
 
-        private static readonly byte[] TimeZoneDefaultRule = Encoding.ASCII.GetBytes(",M4.1.0,M10.5.0");
+        private static ReadOnlySpan<byte> TimeZoneDefaultRule => ",M4.1.0,M10.5.0"u8;
 
         [StructLayout(LayoutKind.Sequential, Pack = 0x4, Size = 0x10)]
         private struct CalendarTimeInternal
@@ -890,14 +891,14 @@ namespace Ryujinx.HLE.HOS.Services.Time.TimeZone
 
             long streamLength = reader.BaseStream.Length;
 
-            if (streamLength < Marshal.SizeOf<TzifHeader>())
+            if (streamLength < Unsafe.SizeOf<TzifHeader>())
             {
                 return false;
             }
 
             TzifHeader header = reader.ReadStruct<TzifHeader>();
 
-            streamLength -= Marshal.SizeOf<TzifHeader>();
+            streamLength -= Unsafe.SizeOf<TzifHeader>();
 
             int ttisGMTCount = Detzcode32(header.TtisGMTCount);
             int ttisSTDCount = Detzcode32(header.TtisSTDCount);

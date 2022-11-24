@@ -22,6 +22,8 @@ namespace Ryujinx.Graphics.Vulkan
         private Device _device;
         private WindowBase _window;
 
+        private bool _initialized;
+
         internal FormatCapabilities FormatCapabilities { get; private set; }
         internal HardwareCapabilities Capabilities;
 
@@ -266,6 +268,8 @@ namespace Ryujinx.Graphics.Vulkan
             LoadFeatures(supportedExtensions, maxQueueCount, queueFamilyIndex);
 
             _window = new Window(this, _surface, _physicalDevice, _device);
+
+            _initialized = true;
         }
 
         public BufferHandle CreateBuffer(int size)
@@ -396,6 +400,7 @@ namespace Ryujinx.Graphics.Vulkan
                 supportsFragmentShaderOrderingIntel: false,
                 supportsGeometryShaderPassthrough: Capabilities.SupportsGeometryShaderPassthrough,
                 supportsImageLoadFormatted: features2.Features.ShaderStorageImageReadWithoutFormat,
+                supportsLayerVertexTessellation: featuresVk12.ShaderOutputLayer,
                 supportsMismatchingViewFormat: true,
                 supportsCubemapView: !IsAmdGcn,
                 supportsNonConstantTextureOffset: false,
@@ -403,7 +408,7 @@ namespace Ryujinx.Graphics.Vulkan
                 supportsTextureShadowLod: false,
                 supportsViewportIndex: featuresVk12.ShaderOutputViewportIndex,
                 supportsViewportSwizzle: false,
-                supportsIndirectParameters: Capabilities.SupportsIndirectParameters,
+                supportsIndirectParameters: true,
                 maximumUniformBuffersPerStage: Constants.MaxUniformBuffersPerStage,
                 maximumStorageBuffersPerStage: Constants.MaxStorageBuffersPerStage,
                 maximumTexturesPerStage: Constants.MaxTexturesPerStage,
@@ -572,6 +577,11 @@ namespace Ryujinx.Graphics.Vulkan
 
         public unsafe void Dispose()
         {
+            if (!_initialized)
+            {
+                return;
+            }
+
             CommandBufferPool.Dispose();
             BackgroundResources.Dispose();
             _counters.Dispose();

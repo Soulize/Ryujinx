@@ -11,6 +11,8 @@ namespace Ryujinx.Graphics.Vulkan
 {
     class HelperShader : IDisposable
     {
+        private const int UniformBufferAlignment = 256;
+
         private readonly PipelineHelperShader _pipeline;
         private readonly ISampler _samplerLinear;
         private readonly ISampler _samplerNearest;
@@ -19,6 +21,8 @@ namespace Ryujinx.Graphics.Vulkan
         private readonly IProgram _programColorClear;
         private readonly IProgram _programStrideChange;
         private readonly IProgram _programColorCopyBetweenMsNonMs;
+        private readonly IProgram _programConvertIndexBuffer;
+        private readonly IProgram _programConvertIndirectData;
 
         public HelperShader(VulkanRenderer gd, Device device)
         {
@@ -88,6 +92,28 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 new SpecDescription((0, SpecConstType.Int32))
             });
+
+            var convertIndexBufferBindings = new ShaderBindings(
+                new[] { 0 },
+                new[] { 1, 2 },
+                Array.Empty<int>(),
+                Array.Empty<int>());
+
+            _programConvertIndexBuffer = gd.CreateProgramWithMinimalLayout(new[]
+            {
+                new ShaderSource(ShaderBinaries.ConvertIndexBufferShaderSource, convertIndexBufferBindings, ShaderStage.Compute, TargetLanguage.Spirv),
+            });
+
+            var convertIndirectDataBindings = new ShaderBindings(
+                new[] { 0 },
+                new[] { 1, 2, 3 },
+                Array.Empty<int>(),
+                Array.Empty<int>());
+
+            _programConvertIndirectData = gd.CreateProgramWithMinimalLayout(new[]
+            {
+                new ShaderSource(ShaderBinaries.ConvertIndirectDataShaderSource, convertIndirectDataBindings, ShaderStage.Compute, TargetLanguage.Spirv),
+            });
         }
 
         public void Blit(
@@ -151,7 +177,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             gd.BufferManager.SetData<float>(bufferHandle, 0, region);
 
-            _pipeline.SetUniformBuffers(1, stackalloc[] { new BufferRange(bufferHandle, 0, RegionBufferSize) });
+            _pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(1, new BufferRange(bufferHandle, 0, RegionBufferSize)) });
 
             Span<GAL.Viewport> viewports = stackalloc GAL.Viewport[1];
 
@@ -214,7 +240,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             gd.BufferManager.SetData<float>(bufferHandle, 0, clearColor);
 
-            _pipeline.SetUniformBuffers(1, stackalloc[] { new BufferRange(bufferHandle, 0, ClearColorBufferSize) });
+            _pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(1, new BufferRange(bufferHandle, 0, ClearColorBufferSize)) });
 
             Span<GAL.Viewport> viewports = stackalloc GAL.Viewport[1];
 
@@ -276,7 +302,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             gd.BufferManager.SetData<float>(bufferHandle, 0, region);
 
-            pipeline.SetUniformBuffers(1, stackalloc[] { new BufferRange(bufferHandle, 0, RegionBufferSize) });
+            pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(1, new BufferRange(bufferHandle, 0, RegionBufferSize)) });
 
             Span<GAL.Viewport> viewports = stackalloc GAL.Viewport[1];
 
@@ -354,7 +380,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                 _pipeline.SetCommandBuffer(cbs);
 
-                _pipeline.SetUniformBuffers(0, stackalloc[] { new BufferRange(bufferHandle, 0, ParamsBufferSize) });
+                _pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(0, new BufferRange(bufferHandle, 0, ParamsBufferSize)) });
 
                 Span<Auto<DisposableBuffer>> sbRanges = new Auto<DisposableBuffer>[2];
 
@@ -408,10 +434,12 @@ namespace Ryujinx.Graphics.Vulkan
             int srcOffset,
             int indexCount)
         {
+            // TODO: Support conversion with primitive restart enabled.
+            // TODO: Convert with a compute shader?
+
             int convertedCount = pattern.GetConvertedCount(indexCount);
             int outputIndexSize = 4;
 
-            // TODO: Do this with a compute shader?
             var srcBuffer = src.GetBuffer().Get(cbs, srcOffset, indexCount * indexSize).Value;
             var dstBuffer = dst.GetBuffer().Get(cbs, 0, convertedCount * outputIndexSize).Value;
 
@@ -543,7 +571,7 @@ namespace Ryujinx.Graphics.Vulkan
             int conversionType = srcIsMs ? src.Info.BytesPerPixel : -src.Info.BytesPerPixel;
             _pipeline.Specialize(conversionType);
 
-            _pipeline.SetUniformBuffers(0, stackalloc[] { new BufferRange(bufferHandle, 0, ParamsBufferSize) });
+            _pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(0, new BufferRange(bufferHandle, 0, ParamsBufferSize)) });
 
             if (src.Info.Target == Target.Texture2DMultisampleArray ||
                 dst.Info.Target == Target.Texture2DMultisampleArray)
@@ -671,6 +699,133 @@ namespace Ryujinx.Graphics.Vulkan
             };
         }
 
+        public void ConvertIndexBufferIndirect(
+            VulkanRenderer gd,
+            CommandBufferScoped cbs,
+            BufferHolder srcIndirectBuffer,
+            BufferHolder dstIndirectBuffer,
+            BufferRange drawCountBuffer,
+            BufferHolder srcIndexBuffer,
+            BufferHolder dstIndexBuffer,
+            IndexBufferPattern pattern,
+            int indexSize,
+            int srcIndexBufferOffset,
+            int srcIndexBufferSize,
+            int srcIndirectBufferOffset,
+            bool hasDrawCount,
+            int maxDrawCount,
+            int indirectDataStride)
+        {
+            // TODO: Support conversion with primitive restart enabled.
+
+            BufferRange drawCountBufferAligned = new BufferRange(
+                drawCountBuffer.Handle,
+                drawCountBuffer.Offset & ~(UniformBufferAlignment - 1),
+                UniformBufferAlignment);
+
+            int indirectDataSize = maxDrawCount * indirectDataStride;
+
+            int indexCount = srcIndexBufferSize / indexSize;
+            int primitivesCount = pattern.GetPrimitiveCount(indexCount);
+            int convertedCount = pattern.GetConvertedCount(indexCount);
+            int outputIndexSize = 4;
+
+            var srcBuffer = srcIndexBuffer.GetBuffer().Get(cbs, srcIndexBufferOffset, indexCount * indexSize).Value;
+            var dstBuffer = dstIndexBuffer.GetBuffer().Get(cbs, 0, convertedCount * outputIndexSize).Value;
+
+            const int ParamsBufferSize = 24 * sizeof(int);
+            const int ParamsIndirectDispatchOffset = 16 * sizeof(int);
+            const int ParamsIndirectDispatchSize = 3 * sizeof(int);
+
+            Span<int> shaderParams = stackalloc int[ParamsBufferSize / sizeof(int)];
+
+            shaderParams[8] = pattern.PrimitiveVertices;
+            shaderParams[9] = pattern.PrimitiveVerticesOut;
+            shaderParams[10] = indexSize;
+            shaderParams[11] = outputIndexSize;
+            shaderParams[12] = pattern.BaseIndex;
+            shaderParams[13] = pattern.IndexStride;
+            shaderParams[14] = srcIndexBufferOffset;
+            shaderParams[15] = primitivesCount;
+            shaderParams[16] = 1;
+            shaderParams[17] = 1;
+            shaderParams[18] = 1;
+            shaderParams[19] = hasDrawCount ? 1 : 0;
+            shaderParams[20] = maxDrawCount;
+            shaderParams[21] = (drawCountBuffer.Offset & (UniformBufferAlignment - 1)) / 4;
+            shaderParams[22] = indirectDataStride / 4;
+            shaderParams[23] = srcIndirectBufferOffset / 4;
+
+            pattern.OffsetIndex.CopyTo(shaderParams.Slice(0, pattern.OffsetIndex.Length));
+
+            var patternBufferHandle = gd.BufferManager.CreateWithHandle(gd, ParamsBufferSize, false, out var patternBuffer);
+            var patternBufferAuto = patternBuffer.GetBuffer();
+
+            gd.BufferManager.SetData<int>(patternBufferHandle, 0, shaderParams);
+
+            _pipeline.SetCommandBuffer(cbs);
+
+            BufferHolder.InsertBufferBarrier(
+                gd,
+                cbs.CommandBuffer,
+                srcIndirectBuffer.GetBuffer().Get(cbs, srcIndirectBufferOffset, indirectDataSize).Value,
+                BufferHolder.DefaultAccessFlags,
+                AccessFlags.AccessShaderReadBit,
+                PipelineStageFlags.PipelineStageAllCommandsBit,
+                PipelineStageFlags.PipelineStageComputeShaderBit,
+                srcIndirectBufferOffset,
+                indirectDataSize);
+
+            _pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(0, drawCountBufferAligned) });
+            _pipeline.SetStorageBuffers(1, new[] { srcIndirectBuffer.GetBuffer(), dstIndirectBuffer.GetBuffer(), patternBuffer.GetBuffer() });
+
+            _pipeline.SetProgram(_programConvertIndirectData);
+            _pipeline.DispatchCompute(1, 1, 1);
+
+            BufferHolder.InsertBufferBarrier(
+                gd,
+                cbs.CommandBuffer,
+                patternBufferAuto.Get(cbs, ParamsIndirectDispatchOffset, ParamsIndirectDispatchSize).Value,
+                AccessFlags.AccessShaderWriteBit,
+                AccessFlags.AccessIndirectCommandReadBit,
+                PipelineStageFlags.PipelineStageComputeShaderBit,
+                PipelineStageFlags.PipelineStageDrawIndirectBit,
+                ParamsIndirectDispatchOffset,
+                ParamsIndirectDispatchSize);
+
+            BufferHolder.InsertBufferBarrier(
+                gd,
+                cbs.CommandBuffer,
+                dstBuffer,
+                BufferHolder.DefaultAccessFlags,
+                AccessFlags.AccessTransferWriteBit,
+                PipelineStageFlags.PipelineStageAllCommandsBit,
+                PipelineStageFlags.PipelineStageTransferBit,
+                0,
+                convertedCount * outputIndexSize);
+
+            _pipeline.SetUniformBuffers(stackalloc[] { new BufferAssignment(0, new BufferRange(patternBufferHandle, 0, ParamsBufferSize)) });
+            _pipeline.SetStorageBuffers(1, new[] { srcIndexBuffer.GetBuffer(), dstIndexBuffer.GetBuffer() });
+
+            _pipeline.SetProgram(_programConvertIndexBuffer);
+            _pipeline.DispatchComputeIndirect(patternBufferAuto, ParamsIndirectDispatchOffset);
+
+            BufferHolder.InsertBufferBarrier(
+                gd,
+                cbs.CommandBuffer,
+                dstBuffer,
+                AccessFlags.AccessTransferWriteBit,
+                BufferHolder.DefaultAccessFlags,
+                PipelineStageFlags.PipelineStageTransferBit,
+                PipelineStageFlags.PipelineStageAllCommandsBit,
+                0,
+                convertedCount * outputIndexSize);
+
+            gd.BufferManager.Delete(patternBufferHandle);
+
+            _pipeline.Finish(gd, cbs);
+        }
+
         protected virtual void Dispose(bool disposing)
         {
             if (disposing)
@@ -680,6 +835,8 @@ namespace Ryujinx.Graphics.Vulkan
                 _programColorClear.Dispose();
                 _programStrideChange.Dispose();
                 _programColorCopyBetweenMsNonMs.Dispose();
+                _programConvertIndexBuffer.Dispose();
+                _programConvertIndirectData.Dispose();
                 _samplerNearest.Dispose();
                 _samplerLinear.Dispose();
                 _pipeline.Dispose();
