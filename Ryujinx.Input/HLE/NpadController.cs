@@ -263,7 +263,6 @@ namespace Ryujinx.Input.HLE
             {
                 // Non-controller doesn't have motions.
                 _leftMotionInput = null;
-                _rightMotionInput = null;
             }
 
             _config = config;
@@ -279,27 +278,11 @@ namespace Ryujinx.Input.HLE
             if (motionConfig.MotionBackend != MotionInputBackendType.CemuHook)
             {
                 _leftMotionInput = new MotionInput();
-                _rightMotionInput = new MotionInput();
-            }
+             }
             else
             {
                 _leftMotionInput = null;
-                _rightMotionInput = null;
             }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void UpdateMotionInputData(IGamepad gamepad, MotionInput motionInput,
-                                                  StandardControllerInputConfig controllerConfig,
-                                                  MotionInputId accelerometerType, MotionInputId gyroscopeType)
-        {
-            Vector3 accelerometer = gamepad.GetMotionData(accelerometerType);
-            Vector3 gyroscope = gamepad.GetMotionData(gyroscopeType);
-
-            accelerometer = new Vector3(accelerometer.X, -accelerometer.Z, accelerometer.Y);
-            gyroscope = new Vector3(gyroscope.X, -gyroscope.Z, gyroscope.Y);
-
-            motionInput.Update(accelerometer, gyroscope, (ulong)PerformanceCounter.ElapsedNanoseconds / 1000, controllerConfig.Motion.Sensitivity, (float)controllerConfig.Motion.GyroDeadzone);
         }
 
         public void Update()
@@ -312,18 +295,15 @@ namespace Ryujinx.Input.HLE
                 {
                     if (controllerConfig.Motion.MotionBackend == MotionInputBackendType.GamepadDriver)
                     {
-                        if (_gamepad.Features.HasFlag(GamepadFeaturesFlag.MotionLeft) && _gamepad.Features.HasFlag(GamepadFeaturesFlag.MotionRight))
+                        if (_gamepad.Features.HasFlag(GamepadFeaturesFlag.Motion))
                         {
-                            UpdateMotionInputData(_gamepad, _leftMotionInput, controllerConfig, MotionInputId.AccelerometerLeft, MotionInputId.GyroscopeLeft);
+                            Vector3 accelerometer = _gamepad.GetMotionData(MotionInputId.Accelerometer);
+                            Vector3 gyroscope = _gamepad.GetMotionData(MotionInputId.Gyroscope);
 
-                            if (controllerConfig.ControllerType == ConfigControllerType.JoyconPair)
-                            {
-                                UpdateMotionInputData(_gamepad, _rightMotionInput, controllerConfig, MotionInputId.AccelerometerRight, MotionInputId.GyroscopeRight);
-                            }
-                        }
-                        else if (_gamepad.Features.HasFlag(GamepadFeaturesFlag.Motion))
-                        {
-                            UpdateMotionInputData(_gamepad, _leftMotionInput, controllerConfig, MotionInputId.Accelerometer, MotionInputId.Gyroscope);
+                            accelerometer = new Vector3(accelerometer.X, -accelerometer.Z, accelerometer.Y);
+                            gyroscope = new Vector3(gyroscope.X, -gyroscope.Z, gyroscope.Y);
+
+                            _leftMotionInput.Update(accelerometer, gyroscope, (ulong)PerformanceCounter.ElapsedNanoseconds / 1000, controllerConfig.Motion.Sensitivity, (float)controllerConfig.Motion.GyroDeadzone);
 
                             if (controllerConfig.ControllerType == ConfigControllerType.JoyconPair)
                             {
@@ -362,7 +342,6 @@ namespace Ryujinx.Input.HLE
                 // Reset states
                 State = default;
                 _leftMotionInput = null;
-                _rightMotionInput = null;
             }
         }
 
