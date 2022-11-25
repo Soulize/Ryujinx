@@ -10,12 +10,6 @@ namespace Ryujinx.Input.SDL2
 {
     class SDL2Gamepad : IGamepad
     {
-        // FIXME Remove those when SDL2-CS bindings are updated for 2.16.0
-        private const SDL_SensorType SDL_SENSOR_ACCEL_L = SDL_SensorType.SDL_SENSOR_GYRO + 1;
-        private const SDL_SensorType SDL_SENSOR_GYRO_L = SDL_SensorType.SDL_SENSOR_GYRO + 2;
-        private const SDL_SensorType SDL_SENSOR_ACCEL_R = SDL_SensorType.SDL_SENSOR_GYRO + 3;
-        private const SDL_SensorType SDL_SENSOR_GYRO_R = SDL_SensorType.SDL_SENSOR_GYRO + 4;
-
         private bool HasConfiguration => _configuration != null;
 
         private class ButtonMappingEntry
@@ -104,18 +98,6 @@ namespace Ryujinx.Input.SDL2
                 SDL_GameControllerSetSensorEnabled(_gamepadHandle, SDL_SensorType.SDL_SENSOR_ACCEL, SDL_bool.SDL_TRUE);
                 SDL_GameControllerSetSensorEnabled(_gamepadHandle, SDL_SensorType.SDL_SENSOR_GYRO, SDL_bool.SDL_TRUE);
             }
-
-            if (Features.HasFlag(GamepadFeaturesFlag.MotionLeft))
-            {
-                SDL_GameControllerSetSensorEnabled(_gamepadHandle, SDL_SENSOR_ACCEL_L, SDL_bool.SDL_TRUE);
-                SDL_GameControllerSetSensorEnabled(_gamepadHandle, SDL_SENSOR_GYRO_L, SDL_bool.SDL_TRUE);
-            }
-
-            if (Features.HasFlag(GamepadFeaturesFlag.MotionRight))
-            {
-                SDL_GameControllerSetSensorEnabled(_gamepadHandle, SDL_SENSOR_ACCEL_R, SDL_bool.SDL_TRUE);
-                SDL_GameControllerSetSensorEnabled(_gamepadHandle, SDL_SENSOR_GYRO_R, SDL_bool.SDL_TRUE);
-            }
         }
 
         private GamepadFeaturesFlag GetFeaturesFlag()
@@ -126,18 +108,6 @@ namespace Ryujinx.Input.SDL2
                 SDL_GameControllerHasSensor(_gamepadHandle, SDL_SensorType.SDL_SENSOR_GYRO) == SDL_bool.SDL_TRUE)
             {
                 result |= GamepadFeaturesFlag.Motion;
-            }
-
-            if (SDL_GameControllerHasSensor(_gamepadHandle, SDL_SENSOR_ACCEL_L) == SDL_bool.SDL_TRUE &&
-                SDL_GameControllerHasSensor(_gamepadHandle, SDL_SENSOR_GYRO_L) == SDL_bool.SDL_TRUE)
-            {
-                result |= GamepadFeaturesFlag.MotionLeft;
-            }
-
-            if (SDL_GameControllerHasSensor(_gamepadHandle, SDL_SENSOR_ACCEL_R) == SDL_bool.SDL_TRUE &&
-                SDL_GameControllerHasSensor(_gamepadHandle, SDL_SENSOR_GYRO_R) == SDL_bool.SDL_TRUE)
-            {
-                result |= GamepadFeaturesFlag.MotionRight;
             }
 
             int error = SDL_GameControllerRumble(_gamepadHandle, 0, 0, 100);
@@ -199,16 +169,16 @@ namespace Ryujinx.Input.SDL2
 
         public Vector3 GetMotionData(MotionInputId inputId)
         {
-            var sensorType = inputId switch
+            SDL_SensorType sensorType = SDL_SensorType.SDL_SENSOR_INVALID;
+
+            if (inputId == MotionInputId.Accelerometer)
             {
-                MotionInputId.Accelerometer => SDL_SensorType.SDL_SENSOR_ACCEL,
-                MotionInputId.Gyroscope => SDL_SensorType.SDL_SENSOR_GYRO,
-                MotionInputId.AccelerometerLeft => SDL_SENSOR_ACCEL_L,
-                MotionInputId.GyroscopeLeft => SDL_SENSOR_GYRO_L,
-                MotionInputId.AccelerometerRight => SDL_SENSOR_ACCEL_R,
-                MotionInputId.GyroscopeRight => SDL_SENSOR_GYRO_R,
-                _ => SDL_SensorType.SDL_SENSOR_INVALID,
-            };
+                sensorType = SDL_SensorType.SDL_SENSOR_ACCEL;
+            }
+            else if (inputId == MotionInputId.Gyroscope)
+            {
+                sensorType = SDL_SensorType.SDL_SENSOR_GYRO;
+            }
 
             if (Features.HasFlag(GamepadFeaturesFlag.Motion) && sensorType != SDL_SensorType.SDL_SENSOR_INVALID)
             {

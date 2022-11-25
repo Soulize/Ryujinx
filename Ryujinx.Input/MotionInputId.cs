@@ -11,39 +11,15 @@
         Invalid,
 
         /// <summary>
-        /// Accelerometer (Unified).
+        /// Accelerometer.
         /// </summary>
         /// <remarks>Values are in m/s^2</remarks>
         Accelerometer,
 
         /// <summary>
-        /// Gyroscope (Unified).
+        /// Gyroscope.
         /// </summary>
         /// <remarks>Values are in degrees</remarks>
-        Gyroscope,
-
-        /// <summary>
-        /// Accelerometer (Left).
-        /// </summary>
-        /// <remarks>Values are in m/s^2</remarks>
-        AccelerometerLeft,
-
-        /// <summary>
-        /// Gyroscope (Left).
-        /// </summary>
-        /// <remarks>Values are in degrees</remarks>
-        GyroscopeLeft,
-
-        /// <summary>
-        /// Accelerometer (Right).
-        /// </summary>
-        /// <remarks>Values are in m/s^2</remarks>
-        AccelerometerRight,
-
-        /// <summary>
-        /// Gyroscope (Right).
-        /// </summary>
-        /// <remarks>Values are in degrees</remarks>
-        GyroscopeRight
+        Gyroscope
     }
 }
