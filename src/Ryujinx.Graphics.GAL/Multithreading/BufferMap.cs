@@ -159,7 +159,7 @@ namespace Ryujinx.Graphics.GAL.Multithreading
                         result = BufferHandle.Null;
                     }
 
-                    assignment = new BufferAssignment(ranges[i].Binding, new BufferRange(result, range.Offset, range.Size));
+                    assignment = new BufferAssignment(ranges[i].Binding, new BufferRange(result, range.Offset, range.Size, range.Write));
                 }
             }
 
