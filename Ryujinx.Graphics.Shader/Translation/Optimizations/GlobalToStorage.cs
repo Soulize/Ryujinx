@@ -128,11 +128,6 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 GetStorageOffset(block, Utils.FindLastOperation(addrLow, block), baseAddressCbOffset) :
                 (null, 0);
 
-            if (byteOffset != null)
-            {
-                ReplaceAddressAlignment(node.List, addrLow, byteOffset, constantOffset);
-            }
-
             if (byteOffset == null)
             {
                 Operand baseAddrLow = Cbuf(0, baseAddressCbOffset);
@@ -159,6 +154,11 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 node.List.AddBefore(node, addOp);
 
                 byteOffset = offset;
+            }
+
+            if (byteOffset != null)
+            {
+                ReplaceAddressAlignment(node.List, addrLow, byteOffset, constantOffset);
             }
 
             if (isStg16Or8)
