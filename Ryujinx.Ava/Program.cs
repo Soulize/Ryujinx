@@ -140,8 +140,8 @@ namespace Ryujinx.Ava
 
         public static void ReloadConfig()
         {
-            string localConfigurationPath   = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config.json");
-            string appDataConfigurationPath = Path.Combine(AppDataManager.BaseDirPath, "Config.json");
+            string localConfigurationPath   = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "PostConfig.json");
+            string appDataConfigurationPath = Path.Combine(AppDataManager.BaseDirPath, "PostConfig.json");
 
             // Now load the configuration as the other subsystems are now registered
             if (File.Exists(localConfigurationPath))
