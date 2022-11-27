@@ -606,8 +606,8 @@
   "SmaaLow": "SMAA Low",
   "SmaaMedium": "SMAA Medium",
   "SmaaHigh": "SMAA High",
-  "SmaaUltra": "SMAA Ultra"
-  "Bilinear": "Bilinear"
-  "Nearest": "Nearest"
+  "SmaaUltra": "SMAA Ultra",
+  "Bilinear": "Bilinear",
+  "Nearest": "Nearest",
   "FSR": "FSR"
 }
