@@ -597,4 +597,17 @@
   "VolumeShort": "音量",
   "SettingsEnableMacroHLE": "启用HLE宏",
   "SettingsEnableMacroHLETooltip": "GPU宏代码的高级模拟。\n提高性能表现，但可能在某些游戏中引起图形错误。\n如果您不确定，请保持此项为开启。"
+    "GraphicsAATooltip": "在游戏渲染时应用抗锯齿，减少锯齿问题改善画面",
+  "GraphicsAALabel": "抗锯齿:",
+  "GraphicsUpscalingLabel": "缩放算法:",
+  "GraphicsUpscalingTooltip": "调整在不同显示大小切换时使用的缩放算法",
+  "GraphicsUpscalingLevelLabel": "锐化等级",
+  "GraphicsUpscalingLevelTooltip": "设置使用FSR锐化时的锐化等级",
+  "SmaaLow": "SMAA 低",
+  "SmaaMedium": "SMAA 中",
+  "SmaaHigh": "SMAA 高",
+  "SmaaUltra": "SMAA 超级",
+  "Bilinear": "双线性",
+  "Nearest": "最邻近",
+  "FSR": "FSR"
 }
