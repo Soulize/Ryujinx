@@ -744,13 +744,13 @@
                                           ToolTip.Tip="{locale:Locale GraphicsUpscalingTooltip}"
                                           SelectedIndex="{Binding UpscaleType}">
                                     <ComboBoxItem>
-                                        <TextBlock Text="Bilinear" />
+                                        <TextBlock Text="{locale:Locale Bilinear}" />
                                     </ComboBoxItem>
                                     <ComboBoxItem>
-                                        <TextBlock Text="Nearest" />
+                                        <TextBlock Text="{locale:Locale Nearest}" />
                                     </ComboBoxItem>
                                     <ComboBoxItem>
-                                        <TextBlock Text="FSR" />
+                                        <TextBlock Text="{locale:Locale FSR}" />
                                     </ComboBoxItem>
                                 </ComboBox>
                                 <Slider Value="{Binding UpscaleLevel}"
