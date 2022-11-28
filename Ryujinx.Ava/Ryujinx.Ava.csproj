@@ -72,6 +72,7 @@
       <SubType>Designer</SubType>
     </AvaloniaResource>
     <AvaloniaResource Include="Assets\Fonts\SegoeFluentIcons.ttf" />
+    <AvaloniaResource Include="Assets\Fonts\STSONG.TTF" />
     <AvaloniaResource Include="Assets\Styles\BaseLight.xaml">
       <Generator>MSBuild:Compile</Generator>
     </AvaloniaResource>
