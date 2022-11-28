@@ -200,6 +200,7 @@
         <Setter Property="FontSize" Value="{DynamicResource FontSize}" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="TextWrapping" Value="WrapWithOverflow" />
+        <Setter Property="FontFamily" Value="avares://Ryujinx.Ava/Assets/Fonts#STSONG" />
     </Style>
     <Style Selector="TextBlock.h1">
         <Setter Property="Margin" Value="{DynamicResource TextMargin}" />
