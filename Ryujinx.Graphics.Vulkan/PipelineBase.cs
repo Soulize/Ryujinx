@@ -350,7 +350,8 @@ namespace Ryujinx.Graphics.Vulkan
                 IndexBufferPattern pattern = _topology switch
                 {
                     GAL.PrimitiveTopology.Quads => QuadsToTrisPattern,
-                    GAL.PrimitiveTopology.TriangleFan => TriFanToTrisPattern,
+                    GAL.PrimitiveTopology.TriangleFan or
+                    GAL.PrimitiveTopology.Polygon => TriFanToTrisPattern,
                     _ => throw new NotSupportedException($"Unsupported topology: {_topology}")
                 };
 
@@ -381,7 +382,8 @@ namespace Ryujinx.Graphics.Vulkan
                 pattern = _topology switch
                 {
                     GAL.PrimitiveTopology.Quads => QuadsToTrisPattern,
-                    GAL.PrimitiveTopology.TriangleFan => TriFanToTrisPattern,
+                    GAL.PrimitiveTopology.TriangleFan or
+                    GAL.PrimitiveTopology.Polygon => TriFanToTrisPattern,
                     _ => throw new NotSupportedException($"Unsupported topology: {_topology}")
                 };
             }
