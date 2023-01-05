@@ -1,5 +1,4 @@
 ﻿using ARMeilleure.Translation;
-using ARMeilleure.Translation.PTC;
 using Avalonia.Input;
 using Avalonia.Threading;
 using LibHac.Tools.FsSystem;
@@ -280,7 +279,7 @@ namespace Ryujinx.Ava
                 _parent.Title = $"Ryujinx {Program.Version}{titleNameSection}{titleVersionSection}{titleIdSection}{titleArchSection}";
             });
 
-            _parent.ViewModel.HandleShaderProgress(Device);
+            _parent.ViewModel.SetUiProgressHandlers(Device);
 
             Renderer.SizeChanged += Window_SizeChanged;
 
@@ -357,8 +356,6 @@ namespace Ryujinx.Ava
 
             DisplaySleep.Restore();
 
-            Ptc.Close();
-            PtcProfiler.Stop();
             NpadManager.Dispose();
             TouchScreenManager.Dispose();
             Device.Dispose();
@@ -432,10 +429,10 @@ namespace Ryujinx.Ava
                     if (userError == UserError.NoFirmware)
                     {
                         UserResult result = await ContentDialogHelper.CreateConfirmationDialog(
-                            LocaleManager.Instance["DialogFirmwareNoFirmwareInstalledMessage"],
-                            string.Format(LocaleManager.Instance["DialogFirmwareInstallEmbeddedMessage"], firmwareVersion.VersionString),
-                            LocaleManager.Instance["InputDialogYes"],
-                            LocaleManager.Instance["InputDialogNo"],
+                            LocaleManager.Instance[LocaleKeys.DialogFirmwareNoFirmwareInstalledMessage],
+                            string.Format(LocaleManager.Instance[LocaleKeys.DialogFirmwareInstallEmbeddedMessage], firmwareVersion.VersionString),
+                            LocaleManager.Instance[LocaleKeys.InputDialogYes],
+                            LocaleManager.Instance[LocaleKeys.InputDialogNo],
                             "");
 
                         if (result != UserResult.Yes)
@@ -463,11 +460,11 @@ namespace Ryujinx.Ava
                         _parent.RefreshFirmwareStatus();
 
                         await ContentDialogHelper.CreateInfoDialog(
-                            string.Format(LocaleManager.Instance["DialogFirmwareInstalledMessage"], firmwareVersion.VersionString),
-                            string.Format(LocaleManager.Instance["DialogFirmwareInstallEmbeddedSuccessMessage"], firmwareVersion.VersionString),
-                            LocaleManager.Instance["InputDialogOk"],
+                            string.Format(LocaleManager.Instance[LocaleKeys.DialogFirmwareInstalledMessage], firmwareVersion.VersionString),
+                            string.Format(LocaleManager.Instance[LocaleKeys.DialogFirmwareInstallEmbeddedSuccessMessage], firmwareVersion.VersionString),
+                            LocaleManager.Instance[LocaleKeys.InputDialogOk],
                             "",
-                            LocaleManager.Instance["RyujinxInfo"]);
+                            LocaleManager.Instance[LocaleKeys.RyujinxInfo]);
                     }
                 }
                 else
@@ -869,7 +866,7 @@ namespace Ryujinx.Ava
         public void UpdateStatus()
         {
             // Run a status update only when a frame is to be drawn. This prevents from updating the ui and wasting a render when no frame is queued
-            string dockedMode = ConfigurationState.Instance.System.EnableDockedMode ? LocaleManager.Instance["Docked"] : LocaleManager.Instance["Handheld"];
+            string dockedMode = ConfigurationState.Instance.System.EnableDockedMode ? LocaleManager.Instance[LocaleKeys.Docked] : LocaleManager.Instance[LocaleKeys.Handheld];
             float scale = GraphicsConfig.ResScale;
 
             if (scale != 1)
@@ -879,11 +876,11 @@ namespace Ryujinx.Ava
 
             StatusUpdatedEvent?.Invoke(this, new StatusUpdatedEventArgs(
                 Device.EnableDeviceVsync,
-                LocaleManager.Instance["VolumeShort"] + $": {(int)(Device.GetVolume() * 100)}%",
+                LocaleManager.Instance[LocaleKeys.VolumeShort] + $": {(int)(Device.GetVolume() * 100)}%",
                 Renderer.IsVulkan ? "Vulkan" : "OpenGL",
                 dockedMode,
                 ConfigurationState.Instance.Graphics.AspectRatio.Value.ToText(),
-                LocaleManager.Instance["Game"] + $": {Device.Statistics.GetGameFrameRate():00.00} FPS ({Device.Statistics.GetGameFrameTime():00.00} ms)",
+                LocaleManager.Instance[LocaleKeys.Game] + $": {Device.Statistics.GetGameFrameRate():00.00} FPS ({Device.Statistics.GetGameFrameTime():00.00} ms)",
                 $"FIFO: {Device.Statistics.GetFifoPercent():00.00} %",
                 $"GPU: {_renderer.GetHardwareInfo().GpuVendor}"));
         }
@@ -949,7 +946,7 @@ namespace Ryujinx.Ava
 
                     if (_keyboardInterface.GetKeyboardStateSnapshot().IsPressed(Key.Delete) && _parent.WindowState != WindowState.FullScreen)
                     {
-                        Ptc.Continue();
+                        Device.Application.DiskCacheLoadState?.Cancel();
                     }
                 });
             }
