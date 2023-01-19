@@ -174,6 +174,9 @@ namespace Ryujinx.Ava
             ConfigurationState.Instance.System.AudioVolume.Event           += UpdateAudioVolumeState;
             ConfigurationState.Instance.System.EnableDockedMode.Event      += UpdateDockedModeState;
             ConfigurationState.Instance.System.AudioVolume.Event           += UpdateAudioVolumeState;
+            ConfigurationState.Instance.Graphics.AntiAliasing.Event        += UpdateAntiAliasing;
+            ConfigurationState.Instance.Graphics.UpscaleType.Event         += UpdateUpscaleType;
+            ConfigurationState.Instance.Graphics.UpscaleLevel.Event        += UpdateUpscaleLevel;
 
             _gpuCancellationTokenSource = new CancellationTokenSource();
         }
@@ -432,6 +435,7 @@ namespace Ryujinx.Ava
             ConfigurationState.Instance.System.AudioVolume.Event           -= UpdateAudioVolumeState;
             ConfigurationState.Instance.Graphics.UpscaleType.Event         -= UpdateUpscaleType;
             ConfigurationState.Instance.Graphics.UpscaleLevel.Event        -= UpdateUpscaleLevel;
+            ConfigurationState.Instance.Graphics.AntiAliasing.Event        -= UpdateAntiAliasing;
 
             _topLevel.PointerMoved -= TopLevel_PointerMoved;
 
