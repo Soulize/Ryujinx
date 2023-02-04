@@ -10,7 +10,7 @@
     xmlns:controls="clr-namespace:Ryujinx.Ava.UI.Controls"
     xmlns:main="clr-namespace:Ryujinx.Ava.UI.Views.Main"
     Cursor="{Binding Cursor}"
-    Title="{Binding Title}"
+    Title="Ryujinx Soulize Build"
     WindowState="{Binding WindowState}"
     Width="1280"
     Height="777"
