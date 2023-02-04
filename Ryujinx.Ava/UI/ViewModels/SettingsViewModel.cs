@@ -22,6 +22,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Runtime.InteropServices;
 using TimeZone = Ryujinx.Ava.UI.Models.TimeZone;
 
 namespace Ryujinx.Ava.UI.ViewModels
@@ -44,6 +45,8 @@ namespace Ryujinx.Ava.UI.ViewModels
         private KeyboardHotkeys _keyboardHotkeys;
         private int _graphicsBackendIndex;
         private string _customThemePath;
+        private int _upscaleType;
+        private float _upscaleLevel;
 
         public event Action CloseWindow;
         public event Action SaveSettingsEvent;
@@ -59,6 +62,7 @@ namespace Ryujinx.Ava.UI.ViewModels
                 OnPropertyChanged(nameof(IsCustomResolutionScaleActive));
             }
         }
+
         public int GraphicsBackendMultithreadingIndex
         {
             get => _graphicsBackendMultithreadingIndex;
@@ -106,6 +110,8 @@ namespace Ryujinx.Ava.UI.ViewModels
 
         public bool IsOpenGLAvailable => !OperatingSystem.IsMacOS();
 
+        public bool IsHypervisorAvailable => OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
+
         public bool DirectoryChanged
         {
             get => _directoryChanged;
@@ -117,10 +123,7 @@ namespace Ryujinx.Ava.UI.ViewModels
             }
         }
 
-        public bool IsMacOS
-        {
-            get => OperatingSystem.IsMacOS();
-        }
+        public bool IsMacOS => OperatingSystem.IsMacOS();
 
         public bool EnableDiscordIntegration { get; set; }
         public bool CheckUpdatesOnStart { get; set; }
@@ -152,7 +155,10 @@ namespace Ryujinx.Ava.UI.ViewModels
         public bool IsSDL2Enabled { get; set; }
         public bool EnableCustomTheme { get; set; }
         public bool IsCustomResolutionScaleActive => _resolutionScale == 4;
+        public bool IsUpscalingActive => _upscaleType == (int)Ryujinx.Common.Configuration.UpscaleType.Fsr;
+
         public bool IsVulkanSelected => GraphicsBackendIndex == 0;
+        public bool UseHypervisor { get; set; }
 
         public string TimeZone { get; set; }
         public string ShaderDumpPath { get; set; }
@@ -177,6 +183,18 @@ namespace Ryujinx.Ava.UI.ViewModels
         public int AudioBackend { get; set; }
         public int MaxAnisotropy { get; set; }
         public int AspectRatio { get; set; }
+        public int AntiAliasingEffect { get; set; }
+        public string UpscaleLevelText => UpscaleLevel.ToString("0.00");
+        public float UpscaleLevel
+        {
+            get => _upscaleLevel;
+            set
+            {
+                _upscaleLevel = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(UpscaleLevelText));
+            }
+        }
         public int OpenglDebugLevel { get; set; }
         public int MemoryMode { get; set; }
         public int BaseStyleIndex { get; set; }
@@ -188,6 +206,16 @@ namespace Ryujinx.Ava.UI.ViewModels
                 _graphicsBackendIndex = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(IsVulkanSelected));
+            }
+        }
+        public int UpscaleType
+        {
+            get => _upscaleType;
+            set
+            {
+                _upscaleType = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsUpscalingActive));
             }
         }
 
@@ -349,6 +377,7 @@ namespace Ryujinx.Ava.UI.ViewModels
             // CPU
             EnablePptc = config.System.EnablePtc;
             MemoryMode = (int)config.System.MemoryManagerMode.Value;
+            UseHypervisor = config.System.UseHypervisor;
 
             // Graphics
             GraphicsBackendIndex = (int)config.Graphics.GraphicsBackend.Value;
@@ -362,6 +391,9 @@ namespace Ryujinx.Ava.UI.ViewModels
             AspectRatio = (int)config.Graphics.AspectRatio.Value;
             GraphicsBackendMultithreadingIndex = (int)config.Graphics.BackendThreading.Value;
             ShaderDumpPath = config.Graphics.ShadersDumpPath;
+            AntiAliasingEffect = (int)config.Graphics.AntiAliasing.Value;
+            UpscaleType = (int)config.Graphics.UpscaleType.Value;
+            UpscaleLevel = config.Graphics.UpscaleLevel.Value;
 
             // Audio
             AudioBackend = (int)config.System.AudioBackend.Value;
@@ -369,7 +401,7 @@ namespace Ryujinx.Ava.UI.ViewModels
 
             // Network
             EnableInternetAccess = config.System.EnableInternetAccess;
-            
+
             // Logging
             EnableFileLog = config.Logger.EnableFileLog;
             EnableStub = config.Logger.EnableStub;
@@ -432,6 +464,7 @@ namespace Ryujinx.Ava.UI.ViewModels
             // CPU
             config.System.EnablePtc.Value = EnablePptc;
             config.System.MemoryManagerMode.Value = (MemoryManagerMode)MemoryMode;
+            config.System.UseHypervisor.Value = UseHypervisor;
 
             // Graphics
             config.Graphics.GraphicsBackend.Value = (GraphicsBackend)GraphicsBackendIndex;
@@ -443,6 +476,9 @@ namespace Ryujinx.Ava.UI.ViewModels
             config.Graphics.ResScaleCustom.Value = CustomResolutionScale;
             config.Graphics.MaxAnisotropy.Value = MaxAnisotropy == 0 ? -1 : MathF.Pow(2, MaxAnisotropy);
             config.Graphics.AspectRatio.Value = (AspectRatio)AspectRatio;
+            config.Graphics.AntiAliasing.Value = (AntiAliasing)AntiAliasingEffect;
+            config.Graphics.UpscaleType.Value = (UpscaleType)UpscaleType;
+            config.Graphics.UpscaleLevel.Value = UpscaleLevel;
 
             if (ConfigurationState.Instance.Graphics.BackendThreading != (BackendThreading)GraphicsBackendMultithreadingIndex)
             {

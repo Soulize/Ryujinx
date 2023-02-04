@@ -172,6 +172,11 @@ namespace Ryujinx.Ava
             ConfigurationState.Instance.Graphics.AspectRatio.Event         += UpdateAspectRatioState;
             ConfigurationState.Instance.System.EnableDockedMode.Event      += UpdateDockedModeState;
             ConfigurationState.Instance.System.AudioVolume.Event           += UpdateAudioVolumeState;
+            ConfigurationState.Instance.System.EnableDockedMode.Event      += UpdateDockedModeState;
+            ConfigurationState.Instance.System.AudioVolume.Event           += UpdateAudioVolumeState;
+            ConfigurationState.Instance.Graphics.AntiAliasing.Event        += UpdateAntiAliasing;
+            ConfigurationState.Instance.Graphics.UpscaleType.Event         += UpdateUpscaleType;
+            ConfigurationState.Instance.Graphics.UpscaleLevel.Event        += UpdateUpscaleLevel;
 
             _gpuCancellationTokenSource = new CancellationTokenSource();
         }
@@ -193,6 +198,17 @@ namespace Ryujinx.Ava
                                           point.Y <= bounds.Height + bounds.Y;
                 }
             }
+        }
+        private void UpdateUpscaleLevel(object sender, ReactiveEventArgs<float> e)
+        {
+            _renderer.Window?.SetUpscaler((Graphics.GAL.UpscaleType)ConfigurationState.Instance.Graphics.UpscaleType.Value);
+            _renderer.Window?.SetUpscalerLevel(ConfigurationState.Instance.Graphics.UpscaleLevel.Value);
+        }
+
+        private void UpdateUpscaleType(object sender, ReactiveEventArgs<Ryujinx.Common.Configuration.UpscaleType> e)
+        {
+            _renderer.Window?.SetUpscaler((Graphics.GAL.UpscaleType)ConfigurationState.Instance.Graphics.UpscaleType.Value);
+            _renderer.Window?.SetUpscalerLevel(ConfigurationState.Instance.Graphics.UpscaleLevel.Value);
         }
 
         private void ShowCursor()
@@ -241,7 +257,7 @@ namespace Ryujinx.Ava
                     {
                         DateTime currentTime = DateTime.Now;
                         string   filename    = $"ryujinx_capture_{currentTime.Year}-{currentTime.Month:D2}-{currentTime.Day:D2}_{currentTime.Hour:D2}-{currentTime.Minute:D2}-{currentTime.Second:D2}.png";
-                        
+
                         string directory = AppDataManager.Mode switch
                         {
                             AppDataManager.LaunchMode.Portable => Path.Combine(AppDataManager.BaseDirPath, "screenshots"),
@@ -346,6 +362,11 @@ namespace Ryujinx.Ava
             }
         }
 
+        private void UpdateAntiAliasing(object sender, ReactiveEventArgs<Ryujinx.Common.Configuration.AntiAliasing> e)
+        {
+            _renderer?.Window?.SetAntiAliasing((Graphics.GAL.AntiAliasing)e.NewValue);
+        }
+
         private void UpdateDockedModeState(object sender, ReactiveEventArgs<bool> e)
         {
             Device?.System.ChangeDockedModeState(e.NewValue);
@@ -412,6 +433,9 @@ namespace Ryujinx.Ava
             ConfigurationState.Instance.Graphics.AspectRatio.Event         -= UpdateAspectRatioState;
             ConfigurationState.Instance.System.EnableDockedMode.Event      -= UpdateDockedModeState;
             ConfigurationState.Instance.System.AudioVolume.Event           -= UpdateAudioVolumeState;
+            ConfigurationState.Instance.Graphics.UpscaleType.Event         -= UpdateUpscaleType;
+            ConfigurationState.Instance.Graphics.UpscaleLevel.Event        -= UpdateUpscaleLevel;
+            ConfigurationState.Instance.Graphics.AntiAliasing.Event        -= UpdateAntiAliasing;
 
             _topLevel.PointerMoved -= TopLevel_PointerMoved;
 
@@ -678,7 +702,8 @@ namespace Ryujinx.Ava
                                                      ConfigurationState.Instance.System.MemoryManagerMode,
                                                      ConfigurationState.Instance.System.IgnoreMissingServices,
                                                      ConfigurationState.Instance.Graphics.AspectRatio,
-                                                     ConfigurationState.Instance.System.AudioVolume);
+                                                     ConfigurationState.Instance.System.AudioVolume,
+                                                     ConfigurationState.Instance.System.UseHypervisor);
 
             Device = new Switch(configuration);
         }
@@ -788,6 +813,10 @@ namespace Ryujinx.Ava
 
             Device.Gpu.Renderer.Initialize(_glLogLevel);
 
+            _renderer?.Window?.SetAntiAliasing((Graphics.GAL.AntiAliasing)ConfigurationState.Instance.Graphics.AntiAliasing.Value);
+            _renderer?.Window?.SetUpscaler((Graphics.GAL.UpscaleType)ConfigurationState.Instance.Graphics.UpscaleType.Value);
+            _renderer?.Window?.SetUpscalerLevel(ConfigurationState.Instance.Graphics.UpscaleLevel.Value);
+
             Width = (int)_rendererHost.Bounds.Width;
             Height = (int)_rendererHost.Bounds.Height;
 
@@ -839,7 +868,7 @@ namespace Ryujinx.Ava
         {
             // Run a status update only when a frame is to be drawn. This prevents from updating the ui and wasting a render when no frame is queued.
             string dockedMode = ConfigurationState.Instance.System.EnableDockedMode ? LocaleManager.Instance[LocaleKeys.Docked] : LocaleManager.Instance[LocaleKeys.Handheld];
-            
+
             if (GraphicsConfig.ResScale != 1)
             {
                 dockedMode += $" ({GraphicsConfig.ResScale}x)";
