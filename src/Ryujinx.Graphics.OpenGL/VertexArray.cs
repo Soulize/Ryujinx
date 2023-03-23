@@ -39,14 +39,15 @@ namespace Ryujinx.Graphics.OpenGL
             GL.BindVertexArray(Handle);
         }
 
-        public void SetVertexBuffers(ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
+        public void SetVertexBuffers(int start, ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
         {
             int minVertexCount = int.MaxValue;
 
-            int bindingIndex;
-            for (bindingIndex = 0; bindingIndex < vertexBuffers.Length; bindingIndex++)
+            int index;
+            for (index = 0; index < vertexBuffers.Length; index++)
             {
-                VertexBufferDescriptor vb = vertexBuffers[bindingIndex];
+                VertexBufferDescriptor vb = vertexBuffers[index];
+                int bindingIndex = start + index;
 
                 if (vb.Buffer.Handle != BufferHandle.Null)
                 {

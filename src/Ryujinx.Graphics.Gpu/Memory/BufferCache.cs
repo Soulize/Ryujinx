@@ -88,23 +88,21 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="gpuVa">Start GPU virtual address of the buffer</param>
         /// <param name="size">Size in bytes of the buffer</param>
         /// <returns>CPU virtual address of the buffer, after address translation</returns>
-        public ulong TranslateAndCreateBuffer(MemoryManager memoryManager, ulong gpuVa, ulong size)
+        public (ulong address, Buffer buffer) TranslateAndCreateBuffer(MemoryManager memoryManager, ulong gpuVa, ulong size)
         {
             if (gpuVa == 0)
             {
-                return 0;
+                return (0, null);
             }
 
             ulong address = memoryManager.Translate(gpuVa);
 
             if (address == MemoryManager.PteUnmapped)
             {
-                return 0;
+                return (0, null);
             }
 
-            CreateBuffer(address, size);
-
-            return address;
+            return (address, CreateBuffer(address, size));
         }
 
         /// <summary>
@@ -113,7 +111,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// </summary>
         /// <param name="address">Address of the buffer in memory</param>
         /// <param name="size">Size of the buffer in bytes</param>
-        public void CreateBuffer(ulong address, ulong size)
+        /// <returns>The buffer spanning the given memory range</returns>
+        public Buffer CreateBuffer(ulong address, ulong size)
         {
             ulong endAddress = address + size;
 
@@ -127,7 +126,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 alignedEndAddress += BufferAlignmentSize;
             }
 
-            CreateBufferAligned(alignedAddress, alignedEndAddress - alignedAddress);
+            return CreateBufferAligned(alignedAddress, alignedEndAddress - alignedAddress);
         }
 
         /// <summary>
@@ -150,7 +149,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 result.EndGpuAddress < gpuVa + size ||
                 result.UnmappedSequence != result.Buffer.UnmappedSequence)
             {
-                ulong address = TranslateAndCreateBuffer(memoryManager, gpuVa, size);
+                (ulong address, Buffer buffer) = TranslateAndCreateBuffer(memoryManager, gpuVa, size);
                 result = new BufferCacheEntry(address, gpuVa, GetBuffer(address, size));
 
                 _dirtyCache[gpuVa] = result;
@@ -184,8 +183,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 result.EndGpuAddress < alignedEndGpuVa ||
                 result.UnmappedSequence != result.Buffer.UnmappedSequence)
             {
-                ulong address = TranslateAndCreateBuffer(memoryManager, alignedGpuVa, size);
-                result = new BufferCacheEntry(address, alignedGpuVa, GetBuffer(address, size));
+                (ulong address, Buffer buffer) = TranslateAndCreateBuffer(memoryManager, alignedGpuVa, size);
+                result = new BufferCacheEntry(address, alignedGpuVa, buffer.Use(address, size));
 
                 _modifiedCache[alignedGpuVa] = result;
             }
@@ -202,8 +201,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// </summary>
         /// <param name="address">Address of the buffer in guest memory</param>
         /// <param name="size">Size in bytes of the buffer</param>
-        private void CreateBufferAligned(ulong address, ulong size)
+        /// <returns>The buffer spanning the given memory range</returns>
+        private Buffer CreateBufferAligned(ulong address, ulong size)
         {
+            Buffer result;
+
             int overlapsCount = _buffers.FindOverlapsNonOverlapping(address, size, ref _bufferOverlaps);
 
             if (overlapsCount != 0)
@@ -280,6 +282,12 @@ namespace Ryujinx.Graphics.Gpu.Memory
 
                     // Existing buffers were modified, we need to rebind everything.
                     NotifyBuffersModified?.Invoke();
+
+                    result = newBuffer;
+                }
+                else
+                {
+                    result = _bufferOverlaps[0];
                 }
             }
             else
@@ -291,9 +299,13 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 {
                     _buffers.Add(buffer);
                 }
+
+                result = buffer;
             }
 
             ShrinkOverlapsBufferIfNeeded();
+
+            return result;
         }
 
         /// <summary>
@@ -319,11 +331,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="size">Size in bytes of the copy</param>
         public void CopyBuffer(MemoryManager memoryManager, ulong srcVa, ulong dstVa, ulong size)
         {
-            ulong srcAddress = TranslateAndCreateBuffer(memoryManager, srcVa, size);
-            ulong dstAddress = TranslateAndCreateBuffer(memoryManager, dstVa, size);
+            (ulong srcAddress, Buffer srcBuffer) = TranslateAndCreateBuffer(memoryManager, srcVa, size);
+            (ulong dstAddress, Buffer dstBuffer) = TranslateAndCreateBuffer(memoryManager, dstVa, size);
 
-            Buffer srcBuffer = GetBuffer(srcAddress, size);
-            Buffer dstBuffer = GetBuffer(dstAddress, size);
+            srcBuffer.Use(srcAddress, size);
+            dstBuffer.Use(dstAddress, size);
 
             int srcOffset = (int)(srcAddress - srcBuffer.Address);
             int dstOffset = (int)(dstAddress - dstBuffer.Address);
@@ -360,9 +372,9 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="value">Value to be written into the buffer</param>
         public void ClearBuffer(MemoryManager memoryManager, ulong gpuVa, ulong size, uint value)
         {
-            ulong address = TranslateAndCreateBuffer(memoryManager, gpuVa, size);
+            (ulong address, Buffer buffer) = TranslateAndCreateBuffer(memoryManager, gpuVa, size);
 
-            Buffer buffer = GetBuffer(address, size);
+            buffer.Use(address, size);
 
             int offset = (int)(address - buffer.Address);
 
@@ -403,7 +415,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="size">Size in bytes of the memory range</param>
         /// <param name="write">Whether the buffer will be written to by this use</param>
         /// <returns>The buffer where the range is fully contained</returns>
-        private Buffer GetBuffer(ulong address, ulong size, bool write = false)
+        public Buffer GetBuffer(ulong address, ulong size, bool write = false)
         {
             Buffer buffer;
 

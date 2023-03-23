@@ -317,9 +317,9 @@ namespace Ryujinx.Graphics.GAL.Multithreading
             _renderer.QueueCommand();
         }
 
-        public void SetVertexBuffers(ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
+        public void SetVertexBuffers(int start, ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
         {
-            _renderer.New<SetVertexBuffersCommand>().Set(_renderer.CopySpan(vertexBuffers));
+            _renderer.New<SetVertexBuffersCommand>().Set(start, _renderer.CopySpan(vertexBuffers));
             _renderer.QueueCommand();
         }
 
