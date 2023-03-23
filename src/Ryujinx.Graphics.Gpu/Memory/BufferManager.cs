@@ -5,6 +5,7 @@ using Ryujinx.Graphics.Gpu.Shader;
 using Ryujinx.Graphics.Shader;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -95,12 +96,32 @@ namespace Ryujinx.Graphics.Gpu.Memory
             }
         }
 
+        private struct BufferBinding
+        {
+            public bool Valid;
+            public BufferRange Range;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool HasChanged(ref BufferRange other)
+            {
+                if (!Valid || !Range.Equals(other))
+                {
+                    Range = other;
+                    Valid = true;
+
+                    return true;
+                }
+
+                return false;
+            }
+        }
+
         private readonly BuffersPerStage _cpStorageBuffers;
         private readonly BuffersPerStage _cpUniformBuffers;
         private readonly BuffersPerStage[] _gpStorageBuffers;
         private readonly BuffersPerStage[] _gpUniformBuffers;
-        private readonly BufferRange[] _gpStorageBindings;
-        private readonly BufferRange[] _gpUniformBindings;
+        private readonly BufferBinding[] _gpStorageBindings;
+        private readonly BufferBinding[] _gpUniformBindings;
 
         private bool _gpStorageBuffersDirty;
         private bool _gpUniformBuffersDirty;
@@ -133,8 +154,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
             _gpStorageBuffers = new BuffersPerStage[Constants.ShaderStages];
             _gpUniformBuffers = new BuffersPerStage[Constants.ShaderStages];
 
-            _gpStorageBindings = new BufferRange[Constants.ShaderStages * Constants.TotalGpStorageBuffers];
-            _gpUniformBindings = new BufferRange[Constants.ShaderStages * Constants.TotalGpUniformBuffers];
+            _gpStorageBindings = new BufferBinding[Constants.ShaderStages * Constants.TotalGpStorageBuffers];
+            _gpUniformBindings = new BufferBinding[Constants.ShaderStages * Constants.TotalGpUniformBuffers];
 
             for (int index = 0; index < Constants.ShaderStages; index++)
             {
@@ -158,21 +179,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
         {
             ref IndexBuffer ib = ref _indexBuffer;
 
-            if (ib.GpuAddress != gpuVa || ib.Size != size)
+            if (IndexBuffer.TranslateAndCreateBuffer(_channel.MemoryManager, ref ib, gpuVa, size, type))
             {
-                (ulong address, Buffer buffer) = _channel.MemoryManager.Physical.BufferCache.TranslateAndCreateBuffer(_channel.MemoryManager, gpuVa, size);
-
-                ib.GpuAddress = gpuVa;
-                ib.Address = address;
-                ib.Size = size;
-
-                _indexBufferDirty = true;
-            }
-
-            if (ib.Type != type)
-            {
-                ib.Type = type;
-
                 _indexBufferDirty = true;
             }
         }
@@ -202,17 +210,10 @@ namespace Ryujinx.Graphics.Gpu.Memory
             ref VertexBuffer vb = ref _vertexBuffers[index];
 
             uint bit = 1u << index;
-            bool dirty = false;
 
-            if (vb.GpuAddress != gpuVa || vb.Size != size)
+            if (VertexBuffer.TranslateAndCreateBuffer(_channel.MemoryManager, ref vb, gpuVa, size, stride, divisor))
             {
-                (ulong address, Buffer buffer) = _channel.MemoryManager.Physical.BufferCache.TranslateAndCreateBuffer(_channel.MemoryManager, gpuVa, size);
-
-                vb.GpuAddress = gpuVa;
-                vb.Address = address;
-                vb.Size = size;
-
-                if (address != 0)
+                if (vb.Bounds.Address != 0)
                 {
                     _vertexBuffersEnableMask |= bit;
                 }
@@ -221,19 +222,6 @@ namespace Ryujinx.Graphics.Gpu.Memory
                     _vertexBuffersEnableMask &= ~(bit);
                 }
 
-                dirty = true;
-            }
-
-            if (vb.Stride != stride || vb.Divisor != divisor)
-            {
-                vb.Stride = stride;
-                vb.Divisor = divisor;
-
-                dirty = true;
-            }
-
-            if (dirty)
-            {
                 _vertexBuffersDirtyMask |= bit & _vertexBuffersEnableMask;
             }
         }
@@ -519,16 +507,16 @@ namespace Ryujinx.Graphics.Gpu.Memory
             {
                 _indexBufferDirty = false;
 
-                if (_indexBuffer.Address != 0)
+                if (_indexBuffer.Bounds.Address != 0)
                 {
-                    BufferRange buffer = bufferCache.GetBufferRange(_indexBuffer.Address, _indexBuffer.Size);
+                    BufferRange buffer = _indexBuffer.Bounds.GetBufferRange(bufferCache);
 
                     _context.Renderer.Pipeline.SetIndexBuffer(buffer, _indexBuffer.Type);
                 }
             }
-            else if (_indexBuffer.Address != 0)
+            else if (_indexBuffer.Bounds.Address != 0)
             {
-                bufferCache.SynchronizeBufferRange(_indexBuffer.Address, _indexBuffer.Size);
+                _indexBuffer.Bounds.SynchronizeMemory();
             }
 
             uint vbEnableMask = _vertexBuffersEnableMask;
@@ -547,12 +535,12 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 {
                     VertexBuffer vb = _vertexBuffers[index];
 
-                    if (vb.Address == 0)
+                    if (vb.Bounds.Address == 0)
                     {
                         continue;
                     }
 
-                    BufferRange buffer = bufferCache.GetBufferRange(vb.Address, vb.Size);
+                    BufferRange buffer = vb.Bounds.GetBufferRange(bufferCache);
 
                     vertexBuffers[index] = new VertexBufferDescriptor(buffer, vb.Stride, vb.Divisor);
                 }
@@ -565,12 +553,12 @@ namespace Ryujinx.Graphics.Gpu.Memory
                 {
                     VertexBuffer vb = _vertexBuffers[index];
 
-                    if (vb.Address == 0)
+                    if (vb.Bounds.Address == 0)
                     {
                         continue;
                     }
 
-                    bufferCache.SynchronizeBufferRange(vb.Address, vb.Size);
+                    vb.Bounds.SynchronizeMemory();
                 }
             }
 
@@ -645,7 +633,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
         /// <param name="lastBindings">Bindings currently set on the backend</param>
         /// <param name="isStorage">True to bind as storage buffer, false to bind as uniform buffer</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void BindBuffers(BufferCache bufferCache, BuffersPerStage[] bindings, BufferRange[] lastBindings, bool isStorage)
+        private void BindBuffers(BufferCache bufferCache, BuffersPerStage[] bindings, BufferBinding[] lastBindings, bool isStorage)
         {
             int rangesCount = 0;
 
@@ -669,9 +657,8 @@ namespace Ryujinx.Graphics.Gpu.Memory
                             ? bounds.GetBufferRangeTillEnd(bufferCache)
                             : bounds.GetBufferRange(bufferCache);
 
-                        if (!lastBindings[binding].Equals(range))
+                        if (lastBindings[binding].HasChanged(ref range))
                         {
-                            lastBindings[binding] = range;
                             ranges[rangesCount++] = new BufferAssignment(binding, range);
                         }
                     }
@@ -762,7 +749,7 @@ namespace Ryujinx.Graphics.Gpu.Memory
                         continue;
                     }
 
-                    bounds.SynchronizeMemory();
+                    bounds.SynchronizeMemory(bounds.Flags.HasFlag(BufferUsageFlags.Write));
                 }
             }
         }
