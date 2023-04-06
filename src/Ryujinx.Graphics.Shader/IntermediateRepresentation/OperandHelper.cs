@@ -10,11 +10,6 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
             return new Operand(OperandType.Argument, value);
         }
 
-        public static Operand Cbuf(int slot, int offset)
-        {
-            return new Operand(slot, offset);
-        }
-
         public static Operand Const(int value)
         {
             return new Operand(OperandType.Constant, value);

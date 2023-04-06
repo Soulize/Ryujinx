@@ -22,7 +22,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 {
                     Operand src = node.Value.GetSource(index);
 
-                    int storageIndex = GetStorageIndex(src, sbStart, sbEnd);
+                    int storageIndex = GetStorageIndex(config, src, sbStart, sbEnd);
 
                     if (storageIndex >= 0)
                     {
@@ -31,7 +31,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
                     if (config.Stage == ShaderStage.Compute)
                     {
-                        int constantIndex = GetStorageIndex(src, ubeStart, ubeEnd);
+                        int constantIndex = GetStorageIndex(config, src, ubeStart, ubeEnd);
 
                         if (constantIndex >= 0)
                         {
@@ -49,7 +49,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 {
                     Operand source = operation.GetSource(0);
 
-                    int storageIndex = SearchForStorageBase(block, source, sbStart, sbEnd);
+                    int storageIndex = SearchForStorageBase(block, config, source, sbStart, sbEnd);
 
                     if (storageIndex >= 0)
                     {
@@ -67,7 +67,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                         // so NVN "emulates" more constant buffers using global memory access.
                         // Here we try to replace the global access back to a constant buffer
                         // load.
-                        storageIndex = SearchForStorageBase(block, source, ubeStart, ubeStart + ubeEnd);
+                        storageIndex = SearchForStorageBase(block, config, source, ubeStart, ubeStart + ubeEnd);
 
                         if (storageIndex >= 0)
                         {
@@ -149,7 +149,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             bool storageAligned = !(config.GpuAccessor.QueryHasUnalignedStorageBuffer() || config.GpuAccessor.QueryHostStorageBufferOffsetAlignment() > Constants.StorageAlignment);
 
             (Operand byteOffset, int constantOffset) = storageAligned ?
-                GetStorageOffset(block, Utils.FindLastOperation(addrLow, block), baseAddressCbOffset) :
+                GetStorageOffset(block, config, Utils.FindLastOperation(addrLow, block), baseAddressCbOffset) :
                 (null, 0);
 
             if (byteOffset != null)
@@ -159,12 +159,15 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
             if (byteOffset == null)
             {
-                Operand baseAddrLow = Cbuf(0, baseAddressCbOffset);
+                Operation ldcOp = Utils.CreateLoadConstant(config, 0, baseAddressCbOffset);
+
+                node.List.AddBefore(node, ldcOp);
+
                 Operand baseAddrTrunc = Local();
 
                 Operand alignMask = Const(-config.GpuAccessor.QueryHostStorageBufferOffsetAlignment());
 
-                Operation andOp = new Operation(Instruction.BitwiseAnd, baseAddrTrunc, baseAddrLow, alignMask);
+                Operation andOp = new Operation(Instruction.BitwiseAnd, baseAddrTrunc, ldcOp.Dest, alignMask);
 
                 node.List.AddBefore(node, andOp);
 
@@ -198,9 +201,9 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             return wordOffset;
         }
 
-        private static bool IsCb0Offset(Operand operand, int offset)
+        private static bool IsCb0Offset(ShaderConfig config, Operand operand, int offset)
         {
-            return operand.Type == OperandType.ConstantBuffer && operand.GetCbufSlot() == 0 && operand.GetCbufOffset() == offset;
+            return Utils.TryGetConstantBuffer(config, operand, out int cbSlot, out int cbOffset) && cbSlot == 0 && cbOffset == offset;
         }
 
         private static void ReplaceAddressAlignment(LinkedList<INode> list, Operand address, Operand byteOffset, int constantOffset)
@@ -244,9 +247,9 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             }
         }
 
-        private static (Operand, int) GetStorageOffset(BasicBlock block, Operand address, int baseAddressCbOffset)
+        private static (Operand, int) GetStorageOffset(BasicBlock block, ShaderConfig config, Operand address, int baseAddressCbOffset)
         {
-            if (IsCb0Offset(address, baseAddressCbOffset))
+            if (IsCb0Offset(config, address, baseAddressCbOffset))
             {
                 // Direct offset: zero.
                 return (Const(0), 0);
@@ -256,7 +259,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
             address = Utils.FindLastOperation(address, block);
 
-            if (IsCb0Offset(address, baseAddressCbOffset))
+            if (IsCb0Offset(config, address, baseAddressCbOffset))
             {
                 // Only constant offset
                 return (Const(0), constantOffset);
@@ -270,11 +273,11 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             Operand src1 = offsetAdd.GetSource(0);
             Operand src2 = Utils.FindLastOperation(offsetAdd.GetSource(1), block);
 
-            if (IsCb0Offset(src2, baseAddressCbOffset))
+            if (IsCb0Offset(config, src2, baseAddressCbOffset))
             {
                 return (src1, constantOffset);
             }
-            else if (IsCb0Offset(src1, baseAddressCbOffset))
+            else if (IsCb0Offset(config, src1, baseAddressCbOffset))
             {
                 return (src2, constantOffset);
             }
@@ -308,13 +311,15 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             {
                 Operand addrLow = operation.GetSource(0);
 
-                Operand baseAddrLow = Cbuf(0, UbeBaseOffset + storageIndex * StorageDescSize);
+                Operation ldcOp = Utils.CreateLoadConstant(config, 0, UbeBaseOffset + storageIndex * StorageDescSize);
+
+                node.List.AddBefore(node, ldcOp);
 
                 Operand baseAddrTrunc = Local();
 
                 Operand alignMask = Const(-config.GpuAccessor.QueryHostStorageBufferOffsetAlignment());
 
-                Operation andOp = new Operation(Instruction.BitwiseAnd, baseAddrTrunc, baseAddrLow, alignMask);
+                Operation andOp = new Operation(Instruction.BitwiseAnd, baseAddrTrunc, ldcOp.Dest, alignMask);
 
                 node.List.AddBefore(node, andOp);
 
@@ -330,21 +335,23 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 return wordOffset;
             }
 
-            Operand[] sources = new Operand[operation.SourcesCount];
+            Operand cbufOffset = GetCbufOffset();
+            Operand vecIndex = Local();
+            Operand elemIndex = Local();
+
+            node.List.AddBefore(node, new Operation(Instruction.ShiftRightU32, 0, vecIndex, cbufOffset, Const(2)));
+            node.List.AddBefore(node, new Operation(Instruction.BitwiseAnd, 0, elemIndex, cbufOffset, Const(3)));
+
+            Operand[] sources = new Operand[4];
 
             int cbSlot = UbeFirstCbuf + storageIndex;
 
-            sources[0] = Const(cbSlot);
-            sources[1] = GetCbufOffset();
+            sources[0] = Const(config.ResourceManager.GetConstantBufferBinding(cbSlot));
+            sources[1] = Const(0);
+            sources[2] = vecIndex;
+            sources[3] = elemIndex;
 
-            config.SetUsedConstantBuffer(cbSlot);
-
-            for (int index = 2; index < operation.SourcesCount; index++)
-            {
-                sources[index] = operation.GetSource(index);
-            }
-
-            Operation ldcOp = new Operation(Instruction.LoadConstant, operation.Dest, sources);
+            Operation ldcOp = new Operation(Instruction.Load, StorageKind.ConstantBuffer, operation.Dest, sources);
 
             for (int index = 0; index < operation.SourcesCount; index++)
             {
@@ -360,13 +367,15 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             return node;
         }
 
-        private static int SearchForStorageBase(BasicBlock block, Operand globalAddress, int sbStart, int sbEnd)
+        private static int SearchForStorageBase(BasicBlock block, ShaderConfig config, Operand globalAddress, int sbStart, int sbEnd)
         {
             globalAddress = Utils.FindLastOperation(globalAddress, block);
 
-            if (globalAddress.Type == OperandType.ConstantBuffer)
+            int storageIndex = GetStorageIndex(config, globalAddress, sbStart, sbEnd);
+
+            if (storageIndex != -1)
             {
-                return GetStorageIndex(globalAddress, sbStart, sbEnd);
+                return storageIndex;
             }
 
             Operation operation = globalAddress.AsgOp as Operation;
@@ -401,7 +410,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             {
                 Operand source = operation.GetSource(index);
 
-                int storageIndex = GetStorageIndex(source, sbStart, sbEnd);
+                storageIndex = GetStorageIndex(config, source, sbStart, sbEnd);
 
                 if (storageIndex != -1)
                 {
@@ -412,13 +421,10 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             return -1;
         }
 
-        private static int GetStorageIndex(Operand operand, int sbStart, int sbEnd)
+        private static int GetStorageIndex(ShaderConfig config, Operand operand, int sbStart, int sbEnd)
         {
-            if (operand.Type == OperandType.ConstantBuffer)
+            if (Utils.TryGetConstantBuffer(config, operand, out int slot, out int offset))
             {
-                int slot = operand.GetCbufSlot();
-                int offset = operand.GetCbufOffset();
-
                 if (slot == 0 && offset >= sbStart && offset < sbEnd)
                 {
                     int storageIndex = (offset - sbStart) / StorageDescSize;

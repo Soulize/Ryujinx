@@ -99,7 +99,7 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             }
 
             DeclareSupportBuffer(context);
-            DeclareUniformBuffers(context, context.Config.GetConstantBufferDescriptors());
+            DeclareConstantBuffers(context, context.Config.Properties.ConstantBuffers.Values);
             DeclareStorageBuffers(context, context.Config.GetStorageBufferDescriptors());
             DeclareSamplers(context, context.Config.GetTextureDescriptors());
             DeclareImages(context, context.Config.GetImageDescriptors());
@@ -161,50 +161,63 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             context.SupportBuffer = supportBufferVariable;
         }
 
-        private static void DeclareUniformBuffers(CodeGenContext context, BufferDescriptor[] descriptors)
+        private static void DeclareConstantBuffers(CodeGenContext context, IEnumerable<BufferDefinition> buffers)
         {
-            if (descriptors.Length == 0)
+            HashSet<SpvInstruction> decoratedTypes = new HashSet<SpvInstruction>();
+
+            foreach (BufferDefinition buffer in buffers)
             {
-                return;
-            }
+                int alignment = buffer.Layout == BufferLayout.Std140 ? 16 : 4;
+                int alignmentMask = alignment - 1;
+                int offset = 0;
 
-            uint ubSize = Constants.ConstantBufferSize / 16;
+                SpvInstruction[] structFieldTypes = new SpvInstruction[buffer.Type.Fields.Length];
+                int[] structFieldOffsets = new int[buffer.Type.Fields.Length];
 
-            var ubArrayType = context.TypeArray(context.TypeVector(context.TypeFP32(), 4), context.Constant(context.TypeU32(), ubSize), true);
-            context.Decorate(ubArrayType, Decoration.ArrayStride, (LiteralInteger)16);
-            var ubStructType = context.TypeStruct(true, ubArrayType);
-            context.Decorate(ubStructType, Decoration.Block);
-            context.MemberDecorate(ubStructType, 0, Decoration.Offset, (LiteralInteger)0);
+                for (int fieldIndex = 0; fieldIndex < buffer.Type.Fields.Length; fieldIndex++)
+                {
+                    StructureField field = buffer.Type.Fields[fieldIndex];
+                    int fieldSize = (field.Type.GetSizeInBytes() + alignmentMask) & ~alignmentMask;
 
-            if (context.Config.UsedFeatures.HasFlag(FeatureFlags.CbIndexing))
-            {
-                int count = descriptors.Max(x => x.Slot) + 1;
+                    structFieldTypes[fieldIndex] = context.GetType(field.Type, field.ArrayLength);
+                    structFieldOffsets[fieldIndex] = offset;
 
-                var ubStructArrayType = context.TypeArray(ubStructType, context.Constant(context.TypeU32(), count));
-                var ubPointerType = context.TypePointer(StorageClass.Uniform, ubStructArrayType);
+                    if (field.Type.HasFlag(AggregateType.Array))
+                    {
+                        // We can't decorate the type more than once.
+                        if (decoratedTypes.Add(structFieldTypes[fieldIndex]))
+                        {
+                            context.Decorate(structFieldTypes[fieldIndex], Decoration.ArrayStride, (LiteralInteger)fieldSize);
+                        }
+
+                        offset += fieldSize * field.ArrayLength;
+                    }
+                    else
+                    {
+                        offset += fieldSize;
+                    }
+                }
+
+                var ubStructType = context.TypeStruct(false, structFieldTypes);
+
+                if (decoratedTypes.Add(ubStructType))
+                {
+                    context.Decorate(ubStructType, Decoration.Block);
+
+                    for (int fieldIndex = 0; fieldIndex < structFieldOffsets.Length; fieldIndex++)
+                    {
+                        context.MemberDecorate(ubStructType, fieldIndex, Decoration.Offset, (LiteralInteger)structFieldOffsets[fieldIndex]);
+                    }
+                }
+
+                var ubPointerType = context.TypePointer(StorageClass.Uniform, ubStructType);
                 var ubVariable = context.Variable(ubPointerType, StorageClass.Uniform);
 
-                context.Name(ubVariable, $"{GetStagePrefix(context.Config.Stage)}_u");
-                context.Decorate(ubVariable, Decoration.DescriptorSet, (LiteralInteger)0);
-                context.Decorate(ubVariable, Decoration.Binding, (LiteralInteger)context.Config.FirstConstantBufferBinding);
+                context.Name(ubVariable, buffer.Name);
+                context.Decorate(ubVariable, Decoration.DescriptorSet, (LiteralInteger)buffer.Set);
+                context.Decorate(ubVariable, Decoration.Binding, (LiteralInteger)buffer.Binding);
                 context.AddGlobalVariable(ubVariable);
-
-                context.UniformBuffersArray = ubVariable;
-            }
-            else
-            {
-                var ubPointerType = context.TypePointer(StorageClass.Uniform, ubStructType);
-
-                foreach (var descriptor in descriptors)
-                {
-                    var ubVariable = context.Variable(ubPointerType, StorageClass.Uniform);
-
-                    context.Name(ubVariable, $"{GetStagePrefix(context.Config.Stage)}_c{descriptor.Slot}");
-                    context.Decorate(ubVariable, Decoration.DescriptorSet, (LiteralInteger)0);
-                    context.Decorate(ubVariable, Decoration.Binding, (LiteralInteger)descriptor.Binding);
-                    context.AddGlobalVariable(ubVariable);
-                    context.UniformBuffers.Add(descriptor.Slot, ubVariable);
-                }
+                context.ConstantBuffers.Add(buffer.Binding, ubVariable);
             }
         }
 

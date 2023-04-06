@@ -42,15 +42,23 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
         public static Operand GetSrcCbuf(EmitterContext context, int cbufSlot, int cbufOffset, bool isFP64 = false)
         {
+            int binding = context.Config.ResourceManager.GetConstantBufferBinding(cbufSlot);
+            int vecIndex = cbufOffset >> 2;
+            int elemIndex = cbufOffset & 3;
+
             if (isFP64)
             {
+                int cbufOffset2 = cbufOffset + 1;
+                int vecIndex2 = cbufOffset2 >> 2;
+                int elemIndex2 = cbufOffset2 & 3;
+
                 return context.PackDouble2x32(
-                    Cbuf(cbufSlot, cbufOffset),
-                    Cbuf(cbufSlot, cbufOffset + 1));
+                    context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), Const(vecIndex), Const(elemIndex)),
+                    context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), Const(vecIndex2), Const(elemIndex2)));
             }
             else
             {
-                return Cbuf(cbufSlot, cbufOffset);
+                return context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), Const(vecIndex), Const(elemIndex));
             }
         }
 

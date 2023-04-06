@@ -36,61 +36,10 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             {
                 OperandType.Argument => GetArgumentName(operand.Value),
                 OperandType.Constant => NumberFormatter.FormatInt(operand.Value),
-                OperandType.ConstantBuffer => GetConstantBufferName(operand, context.Config),
                 OperandType.LocalVariable => _locals[operand],
                 OperandType.Undefined => DefaultNames.UndefinedName,
                 _ => throw new ArgumentException($"Invalid operand type \"{operand.Type}\".")
             };
-        }
-
-        private static string GetConstantBufferName(AstOperand operand, ShaderConfig config)
-        {
-            return GetConstantBufferName(operand.CbufSlot, operand.CbufOffset, config.Stage, config.UsedFeatures.HasFlag(FeatureFlags.CbIndexing));
-        }
-
-        public static string GetConstantBufferName(int slot, int offset, ShaderStage stage, bool cbIndexable)
-        {
-            return $"{GetUbName(stage, slot, cbIndexable)}[{offset >> 2}].{GetSwizzleMask(offset & 3)}";
-        }
-
-        private static string GetVec4Indexed(string vectorName, string indexExpr, bool indexElement)
-        {
-            if (indexElement)
-            {
-                return $"{vectorName}[{indexExpr}]";
-            }
-
-            string result = $"{vectorName}.x";
-            for (int i = 1; i < 4; i++)
-            {
-                result = $"(({indexExpr}) == {i}) ? ({vectorName}.{GetSwizzleMask(i)}) : ({result})";
-            }
-            return $"({result})";
-        }
-
-        public static string GetConstantBufferName(int slot, string offsetExpr, ShaderStage stage, bool cbIndexable, bool indexElement)
-        {
-            return GetVec4Indexed(GetUbName(stage, slot, cbIndexable) + $"[{offsetExpr} >> 2]", offsetExpr + " & 3", indexElement);
-        }
-
-        public static string GetConstantBufferName(string slotExpr, string offsetExpr, ShaderStage stage, bool indexElement)
-        {
-            return GetVec4Indexed(GetUbName(stage, slotExpr) + $"[{offsetExpr} >> 2]", offsetExpr + " & 3", indexElement);
-        }
-
-        public static string GetUbName(ShaderStage stage, int slot, bool cbIndexable)
-        {
-            if (cbIndexable)
-            {
-                return GetUbName(stage, NumberFormatter.FormatInt(slot, AggregateType.S32));
-            }
-
-            return $"{GetShaderStagePrefix(stage)}_{DefaultNames.UniformNamePrefix}{slot}_{DefaultNames.UniformNameSuffix}";
-        }
-
-        private static string GetUbName(ShaderStage stage, string slotExpr)
-        {
-            return $"{GetShaderStagePrefix(stage)}_{DefaultNames.UniformNamePrefix}[{slotExpr}].{DefaultNames.DataName}";
         }
 
         public static string GetSamplerName(ShaderStage stage, AstTextureOperation texOp, string indexExpr)

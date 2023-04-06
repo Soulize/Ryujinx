@@ -6,10 +6,6 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
 {
     class Operand
     {
-        private const int CbufSlotBits = 5;
-        private const int CbufSlotLsb  = 32 - CbufSlotBits;
-        private const int CbufSlotMask = (1 << CbufSlotBits) - 1;
-
         public OperandType Type { get; }
 
         public int Value { get; }
@@ -40,30 +36,9 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
             Value = PackRegInfo(reg.Index, reg.Type);
         }
 
-        public Operand(int slot, int offset) : this()
-        {
-            Type  = OperandType.ConstantBuffer;
-            Value = PackCbufInfo(slot, offset);
-        }
-
-        private static int PackCbufInfo(int slot, int offset)
-        {
-            return (slot << CbufSlotLsb) | offset;
-        }
-
         private static int PackRegInfo(int index, RegisterType type)
         {
             return ((int)type << 24) | index;
-        }
-
-        public int GetCbufSlot()
-        {
-            return (Value >> CbufSlotLsb) & CbufSlotMask;
-        }
-
-        public int GetCbufOffset()
-        {
-            return Value & ~(CbufSlotMask << CbufSlotLsb);
         }
 
         public Register GetRegister()
