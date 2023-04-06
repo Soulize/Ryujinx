@@ -260,17 +260,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                         scaleElements++; // Also includes render target scale, for gl_FragCoord.
                     }
 
-                    DeclareSupportUniformBlock(context, context.Config.Stage, scaleElements);
-
                     if (context.Config.UsedFeatures.HasFlag(FeatureFlags.IntegerSampling) && scaleElements != 0)
                     {
                         AppendHelperFunction(context, $"Ryujinx.Graphics.Shader/CodeGen/Glsl/HelperFunctions/TexelFetchScale_{stage}.glsl");
                         context.AppendLine();
                     }
-                }
-                else if (isFragment || context.Config.Stage == ShaderStage.Vertex)
-                {
-                    DeclareSupportUniformBlock(context, context.Config.Stage, 0);
                 }
             }
 
@@ -754,39 +748,6 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
             string name = $"{DefaultNames.PerPatchAttributePrefix}{attr}";
 
             context.AppendLine($"layout (location = {location}) patch out vec4 {name};");
-        }
-
-        private static void DeclareSupportUniformBlock(CodeGenContext context, ShaderStage stage, int scaleElements)
-        {
-            bool needsSupportBlock = stage == ShaderStage.Fragment ||
-                (context.Config.LastInVertexPipeline && context.Config.GpuAccessor.QueryViewportTransformDisable());
-
-            if (!needsSupportBlock && scaleElements == 0)
-            {
-                return;
-            }
-
-            context.AppendLine($"layout (binding = 0, std140) uniform {DefaultNames.SupportBlockName}");
-            context.EnterScope();
-
-            switch (stage)
-            {
-                case ShaderStage.Fragment:
-                case ShaderStage.Vertex:
-                    context.AppendLine($"uint {DefaultNames.SupportBlockAlphaTestName};");
-                    context.AppendLine($"bool {DefaultNames.SupportBlockIsBgraName}[{SupportBuffer.FragmentIsBgraCount}];");
-                    context.AppendLine($"vec4 {DefaultNames.SupportBlockViewportInverse};");
-                    context.AppendLine($"int {DefaultNames.SupportBlockFragmentScaleCount};");
-                    break;
-                case ShaderStage.Compute:
-                    context.AppendLine($"uint s_reserved[{SupportBuffer.ComputeRenderScaleOffset / SupportBuffer.FieldSize}];");
-                    break;
-            }
-
-            context.AppendLine($"float {DefaultNames.SupportBlockRenderScaleName}[{SupportBuffer.RenderScaleMaxCount}];");
-
-            context.LeaveScope(";");
-            context.AppendLine();
         }
 
         private static void AppendHelperFunction(CodeGenContext context, string filename)

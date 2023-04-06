@@ -1991,36 +1991,6 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                     {
                         varType = context.Config.GetFragmentOutputColorType(location);
                     }
-                    else if (ioVariable == IoVariable.FragmentOutputIsBgra)
-                    {
-                        var pointerType = context.TypePointer(StorageClass.Uniform, context.TypeU32());
-                        var elemIndex = context.Get(AggregateType.S32, operation.GetSource(srcIndex++));
-                        var ptr = context.AccessChain(pointerType, context.SupportBuffer, context.Constant(context.TypeU32(), 1), elemIndex);
-                        varType = AggregateType.U32;
-
-                        var result = context.Load(context.GetType(varType), ptr);
-                        return new OperationResult(varType, result);
-                    }
-                    else if (ioVariable == IoVariable.SupportBlockRenderScale)
-                    {
-                        var pointerType = context.TypePointer(StorageClass.Uniform, context.TypeFP32());
-                        var elemIndex = context.Get(AggregateType.S32, operation.GetSource(srcIndex++));
-                        var ptr = context.AccessChain(pointerType, context.SupportBuffer, context.Constant(context.TypeU32(), 4), elemIndex);
-                        varType = AggregateType.FP32;
-
-                        var result = context.Load(context.GetType(varType), ptr);
-                        return new OperationResult(varType, result);
-                    }
-                    else if (ioVariable == IoVariable.SupportBlockViewInverse)
-                    {
-                        var pointerType = context.TypePointer(StorageClass.Uniform, context.TypeFP32());
-                        var elemIndex = context.Get(AggregateType.S32, operation.GetSource(srcIndex++));
-                        var ptr = context.AccessChain(pointerType, context.SupportBuffer, context.Constant(context.TypeU32(), 2), elemIndex);
-                        varType = AggregateType.FP32;
-
-                        var result = context.Load(context.GetType(varType), ptr);
-                        return new OperationResult(varType, result);
-                    }
                     else
                     {
                         (_, varType) = IoMap.GetSpirvBuiltIn(ioVariable);

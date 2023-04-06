@@ -53,12 +53,12 @@ namespace Ryujinx.Graphics.Shader.Instructions
                 int elemIndex2 = cbufOffset2 & 3;
 
                 return context.PackDouble2x32(
-                    context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), Const(vecIndex), Const(elemIndex)),
-                    context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), Const(vecIndex2), Const(elemIndex2)));
+                    context.Load(StorageKind.ConstantBuffer, binding, Const(0), Const(vecIndex), Const(elemIndex)),
+                    context.Load(StorageKind.ConstantBuffer, binding, Const(0), Const(vecIndex2), Const(elemIndex2)));
             }
             else
             {
-                return context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), Const(vecIndex), Const(elemIndex));
+                return context.Load(StorageKind.ConstantBuffer, binding, Const(0), Const(vecIndex), Const(elemIndex));
             }
         }
 

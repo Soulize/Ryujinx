@@ -162,7 +162,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             if (slot.Type == OperandType.Constant)
             {
                 int binding = context.Config.ResourceManager.GetConstantBufferBinding(slot.Value);
-                return context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), vecIndex, elemIndex);
+                return context.Load(StorageKind.ConstantBuffer, binding, Const(0), vecIndex, elemIndex);
             }
             else
             {
@@ -176,7 +176,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
                     int binding = context.Config.ResourceManager.GetConstantBufferBinding(cbIndex);
 
                     Operand isCurrent = context.ICompareEqual(slot, Const(cbIndex));
-                    Operand currentValue = context.Load(StorageKind.ConstantBuffer, Const(binding), Const(0), vecIndex, elemIndex);
+                    Operand currentValue = context.Load(StorageKind.ConstantBuffer, binding, Const(0), vecIndex, elemIndex);
 
                     value = context.ConditionalSelect(isCurrent, currentValue, value);
 

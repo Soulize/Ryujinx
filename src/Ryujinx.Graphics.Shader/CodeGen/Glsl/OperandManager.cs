@@ -117,6 +117,22 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Glsl
                 {
                     switch (operation.StorageKind)
                     {
+                        case StorageKind.ConstantBuffer:
+                            if (!(operation.GetSource(0) is AstOperand bindingIndex) || bindingIndex.Type != OperandType.Constant)
+                            {
+                                throw new InvalidOperationException($"First input of {operation.Inst} with {operation.StorageKind} storage must be a constant operand.");
+                            }
+
+                            if (!(operation.GetSource(1) is AstOperand fieldIndex) || fieldIndex.Type != OperandType.Constant)
+                            {
+                                throw new InvalidOperationException($"Second input of {operation.Inst} with {operation.StorageKind} storage must be a constant operand.");
+                            }
+
+                            BufferDefinition buffer = context.Config.Properties.ConstantBuffers[bindingIndex.Value];
+                            StructureField field = buffer.Type.Fields[fieldIndex.Value];
+
+                            return field.Type & AggregateType.ElementTypeMask;
+
                         case StorageKind.Input:
                         case StorageKind.InputPerPatch:
                         case StorageKind.Output:

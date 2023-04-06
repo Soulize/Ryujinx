@@ -98,7 +98,6 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 DeclareLocalMemory(context, localMemorySize);
             }
 
-            DeclareSupportBuffer(context);
             DeclareConstantBuffers(context, context.Config.Properties.ConstantBuffers.Values);
             DeclareStorageBuffers(context, context.Config.GetStorageBufferDescriptors());
             DeclareSamplers(context, context.Config.GetTextureDescriptors());
@@ -125,40 +124,6 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             context.AddGlobalVariable(variable);
 
             return variable;
-        }
-
-        private static void DeclareSupportBuffer(CodeGenContext context)
-        {
-            if (!context.Config.Stage.SupportsRenderScale() && !(context.Config.LastInVertexPipeline && context.Config.GpuAccessor.QueryViewportTransformDisable()))
-            {
-                return;
-            }
-
-            var isBgraArrayType = context.TypeArray(context.TypeU32(), context.Constant(context.TypeU32(), SupportBuffer.FragmentIsBgraCount));
-            var viewportInverseVectorType = context.TypeVector(context.TypeFP32(), 4);
-            var renderScaleArrayType = context.TypeArray(context.TypeFP32(), context.Constant(context.TypeU32(), SupportBuffer.RenderScaleMaxCount));
-
-            context.Decorate(isBgraArrayType, Decoration.ArrayStride, (LiteralInteger)SupportBuffer.FieldSize);
-            context.Decorate(renderScaleArrayType, Decoration.ArrayStride, (LiteralInteger)SupportBuffer.FieldSize);
-
-            var supportBufferStructType = context.TypeStruct(false, context.TypeU32(), isBgraArrayType, viewportInverseVectorType, context.TypeS32(), renderScaleArrayType);
-
-            context.MemberDecorate(supportBufferStructType, 0, Decoration.Offset, (LiteralInteger)SupportBuffer.FragmentAlphaTestOffset);
-            context.MemberDecorate(supportBufferStructType, 1, Decoration.Offset, (LiteralInteger)SupportBuffer.FragmentIsBgraOffset);
-            context.MemberDecorate(supportBufferStructType, 2, Decoration.Offset, (LiteralInteger)SupportBuffer.ViewportInverseOffset);
-            context.MemberDecorate(supportBufferStructType, 3, Decoration.Offset, (LiteralInteger)SupportBuffer.FragmentRenderScaleCountOffset);
-            context.MemberDecorate(supportBufferStructType, 4, Decoration.Offset, (LiteralInteger)SupportBuffer.GraphicsRenderScaleOffset);
-            context.Decorate(supportBufferStructType, Decoration.Block);
-
-            var supportBufferPointerType = context.TypePointer(StorageClass.Uniform, supportBufferStructType);
-            var supportBufferVariable = context.Variable(supportBufferPointerType, StorageClass.Uniform);
-
-            context.Decorate(supportBufferVariable, Decoration.DescriptorSet, (LiteralInteger)0);
-            context.Decorate(supportBufferVariable, Decoration.Binding, (LiteralInteger)0);
-
-            context.AddGlobalVariable(supportBufferVariable);
-
-            context.SupportBuffer = supportBufferVariable;
         }
 
         private static void DeclareConstantBuffers(CodeGenContext context, IEnumerable<BufferDefinition> buffers)
@@ -407,25 +372,11 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
         {
             foreach (var ioDefinition in info.IoDefinitions)
             {
-                var ioVariable = ioDefinition.IoVariable;
-
-                // Those are actually from constant buffer, rather than being actual inputs or outputs,
-                // so we must ignore them here as they are declared as part of the support buffer.
-                // TODO: Delete this after we represent this properly on the IR (as a constant buffer rather than "input").
-                if (ioVariable == IoVariable.FragmentOutputIsBgra ||
-                    ioVariable == IoVariable.SupportBlockRenderScale ||
-                    ioVariable == IoVariable.SupportBlockViewInverse)
-                {
-                    continue;
-                }
-
-                bool isOutput = ioDefinition.StorageKind.IsOutput();
-                bool isPerPatch = ioDefinition.StorageKind.IsPerPatch();
-
                 PixelImap iq = PixelImap.Unused;
 
                 if (context.Config.Stage == ShaderStage.Fragment)
                 {
+                    var ioVariable = ioDefinition.IoVariable;
                     if (ioVariable == IoVariable.UserDefined)
                     {
                         iq = context.Config.ImapTypes[ioDefinition.Location].GetFirstUsedType();
@@ -441,6 +392,9 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                         }
                     }
                 }
+
+                bool isOutput = ioDefinition.StorageKind.IsOutput();
+                bool isPerPatch = ioDefinition.StorageKind.IsPerPatch();
 
                 DeclareInputOrOutput(context, ioDefinition, isOutput, isPerPatch, iq);
             }

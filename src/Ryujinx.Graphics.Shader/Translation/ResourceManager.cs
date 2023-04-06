@@ -27,6 +27,8 @@ namespace Ryujinx.Graphics.Shader.Translation
             _cbSlotToBindingMap.AsSpan().Fill(-1);
 
             _usedConstantBufferBindings = new HashSet<int>();
+
+            properties.AddConstantBuffer(0, new BufferDefinition(BufferLayout.Std140, 0, 0, "support_buffer", SupportBuffer.GetStructureType()));
         }
 
         public int GetConstantBufferBinding(int slot)
@@ -76,6 +78,11 @@ namespace Ryujinx.Graphics.Shader.Translation
                 {
                     descriptors[descriptorIndex++] = new BufferDescriptor(binding, slot);
                 }
+            }
+
+            if (descriptors.Length != descriptorIndex)
+            {
+                Array.Resize(ref descriptors, descriptorIndex);
             }
 
             return descriptors;
