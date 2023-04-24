@@ -1203,7 +1203,7 @@ namespace Ryujinx.Graphics.Vulkan
                     var vb = Gd.BufferManager.GetBuffer(CommandBuffer, vertexBuffer.Buffer.Handle, false);
                     if (vb != null)
                     {
-                        int binding = i + start + 1;
+                        int binding = i + 1;
                         int descriptorIndex = validCount++;
 
                         _newState.Internal.VertexBindingDescriptions[descriptorIndex] = new VertexInputBindingDescription(
