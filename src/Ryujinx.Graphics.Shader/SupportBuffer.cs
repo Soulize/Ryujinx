@@ -25,6 +25,8 @@ namespace Ryujinx.Graphics.Shader
 
     public struct SupportBuffer
     {
+        internal const int Binding = 0;
+
         public static int FieldSize;
         public static int RequiredSize;
 
