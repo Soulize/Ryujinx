@@ -1,4 +1,5 @@
 using Ryujinx.Graphics.Shader.IntermediateRepresentation;
+using Ryujinx.Graphics.Shader.StructuredIr;
 using Ryujinx.Graphics.Shader.Translation.Optimizations;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,6 +16,7 @@ namespace Ryujinx.Graphics.Shader.Translation
         {
             bool isVertexShader = config.Stage == ShaderStage.Vertex;
             bool hasConstantBufferDrawParameters = config.GpuAccessor.QueryHasConstantBufferDrawParameters();
+            bool hasVectorIndexingBug = config.GpuAccessor.QueryHostHasVectorIndexingBug();
             bool supportsSnormBufferTextureFormat = config.GpuAccessor.QueryHostSupportsSnormBufferTextureFormat();
 
             for (int blkIndex = 0; blkIndex < blocks.Length; blkIndex++)
@@ -44,6 +46,11 @@ namespace Ryujinx.Graphics.Shader.Translation
                         }
                     }
 
+                    if (hasVectorIndexingBug)
+                    {
+                        InsertVectorComponentSelect(node, config);
+                    }
+
                     LinkedListNode<INode> nextNode = node.Next;
 
                     if (operation is TextureOperation texOp)
@@ -68,6 +75,84 @@ namespace Ryujinx.Graphics.Shader.Translation
                     node = nextNode;
                 }
             }
+        }
+
+        private static void InsertVectorComponentSelect(LinkedListNode<INode> node, ShaderConfig config)
+        {
+            Operation operation = (Operation)node.Value;
+
+            if (operation.Inst != Instruction.Load ||
+                operation.StorageKind != StorageKind.ConstantBuffer ||
+                operation.SourcesCount < 3)
+            {
+                return;
+            }
+
+            Operand bindingIndex = operation.GetSource(0);
+            Operand fieldIndex = operation.GetSource(1);
+            Operand elemIndex = operation.GetSource(operation.SourcesCount - 1);
+
+            if (bindingIndex.Type != OperandType.Constant ||
+                fieldIndex.Type != OperandType.Constant ||
+                elemIndex.Type == OperandType.Constant)
+            {
+                return;
+            }
+
+            BufferDefinition buffer = config.Properties.ConstantBuffers[bindingIndex.Value];
+            StructureField field = buffer.Type.Fields[fieldIndex.Value];
+
+            int elemCount = (field.Type & AggregateType.ElementCountMask) switch
+            {
+                AggregateType.Vector2 => 2,
+                AggregateType.Vector3 => 3,
+                AggregateType.Vector4 => 4,
+                _ => 1
+            };
+
+            if (elemCount == 1)
+            {
+                return;
+            }
+
+            Operand result = null;
+
+            for (int i = 0; i < elemCount; i++)
+            {
+                Operand value = Local();
+                Operand[] inputs = new Operand[operation.SourcesCount];
+
+                for (int srcIndex = 0; srcIndex < inputs.Length - 1; srcIndex++)
+                {
+                    inputs[srcIndex] = operation.GetSource(srcIndex);
+                }
+
+                inputs[inputs.Length - 1] = Const(i);
+
+                Operation loadOp = new Operation(Instruction.Load, StorageKind.ConstantBuffer, value, inputs);
+
+                node.List.AddBefore(node, loadOp);
+
+                if (i == 0)
+                {
+                    result = value;
+                }
+                else
+                {
+                    Operand isCurrentIndex = Local();
+                    Operand selection = Local();
+
+                    Operation compareOp = new Operation(Instruction.CompareEqual, isCurrentIndex, new Operand[] { elemIndex, Const(i) });
+                    Operation selectOp = new Operation(Instruction.ConditionalSelect, selection, new Operand[] { isCurrentIndex, value, result });
+
+                    node.List.AddBefore(node, compareOp);
+                    node.List.AddBefore(node, selectOp);
+
+                    result = selection;
+                }
+            }
+
+            operation.TurnIntoCopy(result);
         }
 
         private static LinkedListNode<INode> RewriteGlobalAccess(LinkedListNode<INode> node, ShaderConfig config)
