@@ -1,7 +1,7 @@
-using Ryujinx.Graphics.Shader.Decoders;
 using Ryujinx.Graphics.Shader.IntermediateRepresentation;
+using Ryujinx.Graphics.Shader.StructuredIr;
+using Ryujinx.Graphics.Shader.Translation.Optimizations;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 
@@ -16,6 +16,7 @@ namespace Ryujinx.Graphics.Shader.Translation
         {
             bool isVertexShader = config.Stage == ShaderStage.Vertex;
             bool hasConstantBufferDrawParameters = config.GpuAccessor.QueryHasConstantBufferDrawParameters();
+            bool hasVectorIndexingBug = config.GpuAccessor.QueryHostHasVectorIndexingBug();
             bool supportsSnormBufferTextureFormat = config.GpuAccessor.QueryHostSupportsSnormBufferTextureFormat();
 
             for (int blkIndex = 0; blkIndex < blocks.Length; blkIndex++)
@@ -34,15 +35,20 @@ namespace Ryujinx.Graphics.Shader.Translation
                     {
                         if (hasConstantBufferDrawParameters)
                         {
-                            if (ReplaceConstantBufferWithDrawParameters(node, operation))
+                            if (ReplaceConstantBufferWithDrawParameters(config, node, operation))
                             {
                                 config.SetUsedFeature(FeatureFlags.DrawParameters);
                             }
                         }
-                        else if (HasConstantBufferDrawParameters(operation))
+                        else if (HasConstantBufferDrawParameters(config, operation))
                         {
                             config.SetUsedFeature(FeatureFlags.DrawParameters);
                         }
+                    }
+
+                    if (hasVectorIndexingBug)
+                    {
+                        InsertVectorComponentSelect(node, config);
                     }
 
                     LinkedListNode<INode> nextNode = node.Next;
@@ -71,6 +77,84 @@ namespace Ryujinx.Graphics.Shader.Translation
             }
         }
 
+        private static void InsertVectorComponentSelect(LinkedListNode<INode> node, ShaderConfig config)
+        {
+            Operation operation = (Operation)node.Value;
+
+            if (operation.Inst != Instruction.Load ||
+                operation.StorageKind != StorageKind.ConstantBuffer ||
+                operation.SourcesCount < 3)
+            {
+                return;
+            }
+
+            Operand bindingIndex = operation.GetSource(0);
+            Operand fieldIndex = operation.GetSource(1);
+            Operand elemIndex = operation.GetSource(operation.SourcesCount - 1);
+
+            if (bindingIndex.Type != OperandType.Constant ||
+                fieldIndex.Type != OperandType.Constant ||
+                elemIndex.Type == OperandType.Constant)
+            {
+                return;
+            }
+
+            BufferDefinition buffer = config.Properties.ConstantBuffers[bindingIndex.Value];
+            StructureField field = buffer.Type.Fields[fieldIndex.Value];
+
+            int elemCount = (field.Type & AggregateType.ElementCountMask) switch
+            {
+                AggregateType.Vector2 => 2,
+                AggregateType.Vector3 => 3,
+                AggregateType.Vector4 => 4,
+                _ => 1
+            };
+
+            if (elemCount == 1)
+            {
+                return;
+            }
+
+            Operand result = null;
+
+            for (int i = 0; i < elemCount; i++)
+            {
+                Operand value = Local();
+                Operand[] inputs = new Operand[operation.SourcesCount];
+
+                for (int srcIndex = 0; srcIndex < inputs.Length - 1; srcIndex++)
+                {
+                    inputs[srcIndex] = operation.GetSource(srcIndex);
+                }
+
+                inputs[inputs.Length - 1] = Const(i);
+
+                Operation loadOp = new Operation(Instruction.Load, StorageKind.ConstantBuffer, value, inputs);
+
+                node.List.AddBefore(node, loadOp);
+
+                if (i == 0)
+                {
+                    result = value;
+                }
+                else
+                {
+                    Operand isCurrentIndex = Local();
+                    Operand selection = Local();
+
+                    Operation compareOp = new Operation(Instruction.CompareEqual, isCurrentIndex, new Operand[] { elemIndex, Const(i) });
+                    Operation selectOp = new Operation(Instruction.ConditionalSelect, selection, new Operand[] { isCurrentIndex, value, result });
+
+                    node.List.AddBefore(node, compareOp);
+                    node.List.AddBefore(node, selectOp);
+
+                    result = selection;
+                }
+            }
+
+            operation.TurnIntoCopy(result);
+        }
+
         private static LinkedListNode<INode> RewriteGlobalAccess(LinkedListNode<INode> node, ShaderConfig config)
         {
             Operation operation = (Operation)node.Value;
@@ -90,6 +174,15 @@ namespace Ryujinx.Graphics.Shader.Translation
                 return local;
             }
 
+            Operand PrependStorageOperation(Instruction inst, StorageKind storageKind, params Operand[] sources)
+            {
+                Operand local = Local();
+
+                node.List.AddBefore(node, new Operation(inst, storageKind, local, sources));
+
+                return local;
+            }
+
             Operand PrependExistingOperation(Operation operation)
             {
                 Operand local = Local();
@@ -98,6 +191,13 @@ namespace Ryujinx.Graphics.Shader.Translation
                 node.List.AddBefore(node, operation);
 
                 return local;
+            }
+
+            Operand PrependExistingOperationDest(Operation operation)
+            {
+                node.List.AddBefore(node, operation);
+
+                return operation.Dest;
             }
 
             Operand addrLow  = operation.GetSource(0);
@@ -110,9 +210,9 @@ namespace Ryujinx.Graphics.Shader.Translation
 
             Operand BindingRangeCheck(int cbOffset, out Operand baseAddrLow)
             {
-                baseAddrLow = Cbuf(0, cbOffset);
-                Operand baseAddrHigh = Cbuf(0, cbOffset + 1);
-                Operand size = Cbuf(0, cbOffset + 2);
+                baseAddrLow          = PrependExistingOperationDest(Utils.CreateLoadConstant(config, 0, cbOffset));
+                Operand baseAddrHigh = PrependExistingOperationDest(Utils.CreateLoadConstant(config, 0, cbOffset + 1));
+                Operand size         = PrependExistingOperationDest(Utils.CreateLoadConstant(config, 0, cbOffset + 2));
 
                 Operand offset = PrependOperation(Instruction.Subtract, addrLow, baseAddrLow);
                 Operand borrow = PrependOperation(Instruction.CompareLessU32, addrLow, baseAddrLow);
@@ -203,8 +303,6 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                     cbeUseMask &= ~(1 << slot);
 
-                    config.SetUsedConstantBuffer(cbSlot);
-
                     Operand previousResult = PrependExistingOperation(storageOp);
 
                     int cbOffset = GetConstantUbeOffset(slot);
@@ -215,18 +313,17 @@ namespace Ryujinx.Graphics.Shader.Translation
                     Operand byteOffsetConst = PrependOperation(Instruction.Subtract, addrLow, baseAddrTruncConst);
 
                     Operand cbIndex = PrependOperation(Instruction.ShiftRightU32, byteOffsetConst, Const(2));
+                    Operand vecIndex = PrependOperation(Instruction.ShiftRightU32, cbIndex, Const(2));
+                    Operand elemIndex = PrependOperation(Instruction.BitwiseAnd, cbIndex, Const(3));
 
-                    Operand[] sourcesCb = new Operand[operation.SourcesCount];
+                    Operand[] sourcesCb = new Operand[4];
 
-                    sourcesCb[0] = Const(cbSlot);
-                    sourcesCb[1] = cbIndex;
+                    sourcesCb[0] = Const(config.ResourceManager.GetConstantBufferBinding(cbSlot));
+                    sourcesCb[1] = Const(0);
+                    sourcesCb[2] = vecIndex;
+                    sourcesCb[3] = elemIndex;
 
-                    for (int index = 2; index < operation.SourcesCount; index++)
-                    {
-                        sourcesCb[index] = operation.GetSource(index);
-                    }
-
-                    Operand ldcResult = PrependOperation(Instruction.LoadConstant, sourcesCb);
+                    Operand ldcResult = PrependStorageOperation(Instruction.Load, StorageKind.ConstantBuffer, sourcesCb);
 
                     storageOp = new Operation(Instruction.ConditionalSelect, operation.Dest, inRange, ldcResult, previousResult);
                 }
@@ -706,7 +803,7 @@ namespace Ryujinx.Graphics.Shader.Translation
             return node;
         }
 
-        private static bool ReplaceConstantBufferWithDrawParameters(LinkedListNode<INode> node, Operation operation)
+        private static bool ReplaceConstantBufferWithDrawParameters(ShaderConfig config, LinkedListNode<INode> node, Operation operation)
         {
             Operand GenerateLoad(IoVariable ioVariable)
             {
@@ -721,9 +818,9 @@ namespace Ryujinx.Graphics.Shader.Translation
             {
                 Operand src = operation.GetSource(srcIndex);
 
-                if (src.Type == OperandType.ConstantBuffer && src.GetCbufSlot() == 0)
+                if (Utils.TryGetConstantBuffer(config, src, out int cbSlot, out int cbOffset) && cbSlot == 0)
                 {
-                    switch (src.GetCbufOffset())
+                    switch (cbOffset)
                     {
                         case Constants.NvnBaseVertexByteOffset / 4:
                             operation.SetSource(srcIndex, GenerateLoad(IoVariable.BaseVertex));
@@ -744,15 +841,15 @@ namespace Ryujinx.Graphics.Shader.Translation
             return modified;
         }
 
-        private static bool HasConstantBufferDrawParameters(Operation operation)
+        private static bool HasConstantBufferDrawParameters(ShaderConfig config, Operation operation)
         {
             for (int srcIndex = 0; srcIndex < operation.SourcesCount; srcIndex++)
             {
                 Operand src = operation.GetSource(srcIndex);
 
-                if (src.Type == OperandType.ConstantBuffer && src.GetCbufSlot() == 0)
+                if (Utils.TryGetConstantBuffer(config, src, out int cbSlot, out int cbOffset) && cbSlot == 0)
                 {
-                    switch (src.GetCbufOffset())
+                    switch (cbOffset)
                     {
                         case Constants.NvnBaseVertexByteOffset / 4:
                         case Constants.NvnBaseInstanceByteOffset / 4:

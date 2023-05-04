@@ -165,13 +165,63 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
         private static bool IsSameOperand(Operand x, Operand y)
         {
-            if (x.Type != y.Type || x.Value != y.Value)
+            if (x.Type != y.Type)
             {
                 return false;
             }
 
-            // TODO: Handle Load operations with the same storage and the same constant parameters.
-            return x.Type == OperandType.Constant || x.Type == OperandType.ConstantBuffer;
+            if (x.Type == OperandType.Constant)
+            {
+                return x.Value == y.Value;
+            }
+            else if (x.Type == OperandType.LocalVariable)
+            {
+                // Look for loads from input or constant buffers,
+                // if they are the same, we can assume the values are the same
+                // as those values can't be modified.
+
+                if (!(x.AsgOp is Operation xOperation) ||
+                    !(y.AsgOp is Operation yOperation))
+                {
+                    return false;
+                }
+
+                if (xOperation.Inst != Instruction.Load ||
+                    yOperation.Inst != Instruction.Load ||
+                    xOperation.StorageKind != yOperation.StorageKind)
+                {
+                    return false;
+                }
+
+                if (xOperation.StorageKind != StorageKind.Input &&
+                    xOperation.StorageKind != StorageKind.InputPerPatch &&
+                    xOperation.StorageKind != StorageKind.ConstantBuffer)
+                {
+                    return false;
+                }
+
+                if (xOperation.SourcesCount != yOperation.SourcesCount)
+                {
+                    return false;
+                }
+
+                for (int srcIndex = 0; srcIndex < xOperation.SourcesCount; srcIndex++)
+                {
+                    Operand xSrc = xOperation.GetSource(srcIndex);
+                    Operand ySrc = yOperation.GetSource(srcIndex);
+
+                    if (xSrc.Type != OperandType.Constant ||
+                        ySrc.Type != OperandType.Constant ||
+                        xSrc.Value != ySrc.Value)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            return false;
         }
 
         private static bool PropagatePack(Operation packOp)

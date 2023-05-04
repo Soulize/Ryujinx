@@ -41,9 +41,9 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                         texOp.Type == SamplerType.TextureBuffer ||
                         texOp.Inst == Instruction.TextureSize;
 
-                    if (bindlessHandle.Type == OperandType.ConstantBuffer)
+                    if (Utils.TryGetConstantBuffer(config, bindlessHandle, out int bindlessHandleCbufSlot, out int bindlessHandleCbufOffset))
                     {
-                        SetHandle(config, texOp, bindlessHandle.GetCbufOffset(), bindlessHandle.GetCbufSlot(), rewriteSamplerType, isImage: false);
+                        SetHandle(config, texOp, bindlessHandleCbufOffset, bindlessHandleCbufSlot, rewriteSamplerType, isImage: false);
                         continue;
                     }
 
@@ -92,14 +92,14 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                             src0AsgOp.Inst == Instruction.BitwiseAnd &&
                             src1AsgOp.Inst == Instruction.BitwiseAnd)
                         {
-                            src0 = GetSourceForMaskedHandle(src0AsgOp, 0xFFFFF);
-                            src1 = GetSourceForMaskedHandle(src1AsgOp, 0xFFF00000);
+                            src0 = GetSourceForMaskedHandle(config, src0AsgOp, 0xFFFFF);
+                            src1 = GetSourceForMaskedHandle(config, src1AsgOp, 0xFFF00000);
 
                             // The OR operation is commutative, so we can also try to swap the operands to get a match.
                             if (src0 == null || src1 == null)
                             {
-                                src0 = GetSourceForMaskedHandle(src1AsgOp, 0xFFFFF);
-                                src1 = GetSourceForMaskedHandle(src0AsgOp, 0xFFF00000);
+                                src0 = GetSourceForMaskedHandle(config, src1AsgOp, 0xFFFFF);
+                                src1 = GetSourceForMaskedHandle(config, src0AsgOp, 0xFFF00000);
                             }
 
                             if (src0 == null || src1 == null)
@@ -134,7 +134,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                         handleType = TextureHandleType.SeparateConstantSamplerHandle;
                     }
 
-                    if (src0.Type != OperandType.ConstantBuffer)
+                    if (!Utils.TryGetConstantBuffer(config, src0, out int src0CbufSlot, out int src0CbufOffset))
                     {
                         continue;
                     }
@@ -144,18 +144,18 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                         SetHandle(
                             config,
                             texOp,
-                            TextureHandle.PackOffsets(src0.GetCbufOffset(), ((src1.Value >> 20) & 0xfff), handleType),
-                            TextureHandle.PackSlots(src0.GetCbufSlot(), 0),
+                            TextureHandle.PackOffsets(src0CbufOffset, ((src1.Value >> 20) & 0xfff), handleType),
+                            TextureHandle.PackSlots(src0CbufSlot, 0),
                             rewriteSamplerType,
                             isImage: false);
                     }
-                    else if (src1.Type == OperandType.ConstantBuffer)
+                    else if (Utils.TryGetConstantBuffer(config, src1, out int src1CbufSlot, out int src1CbufOffset))
                     {
                         SetHandle(
                             config,
                             texOp,
-                            TextureHandle.PackOffsets(src0.GetCbufOffset(), src1.GetCbufOffset(), handleType),
-                            TextureHandle.PackSlots(src0.GetCbufSlot(), src1.GetCbufSlot()),
+                            TextureHandle.PackOffsets(src0CbufOffset, src1CbufOffset, handleType),
+                            TextureHandle.PackSlots(src0CbufSlot, src1CbufSlot),
                             rewriteSamplerType,
                             isImage: false);
                     }
@@ -166,11 +166,8 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 {
                     Operand src0 = Utils.FindLastOperation(texOp.GetSource(0), block);
 
-                    if (src0.Type == OperandType.ConstantBuffer)
+                    if (Utils.TryGetConstantBuffer(config, src0, out int cbufSlot, out int cbufOffset))
                     {
-                        int cbufOffset = src0.GetCbufOffset();
-                        int cbufSlot = src0.GetCbufSlot();
-
                         if (texOp.Format == TextureFormat.Unknown)
                         {
                             if (texOp.Inst == Instruction.ImageAtomic)
@@ -191,27 +188,30 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             }
         }
 
-        private static Operand GetSourceForMaskedHandle(Operation asgOp, uint mask)
+        private static Operand GetSourceForMaskedHandle(ShaderConfig config, Operation asgOp, uint mask)
         {
             // Assume it was already checked that the operation is bitwise AND.
             Operand src0 = asgOp.GetSource(0);
             Operand src1 = asgOp.GetSource(1);
 
-            if (src0.Type == OperandType.ConstantBuffer && src1.Type == OperandType.ConstantBuffer)
+            bool src0IsConstantBuffer = Utils.TryGetConstantBuffer(config, src0, out int src0CbufSlot, out _);
+            bool src1IsConstantBuffer = Utils.TryGetConstantBuffer(config, src1, out _, out _);
+
+            if (src0IsConstantBuffer && src1IsConstantBuffer)
             {
                 // We can't check if the mask matches here as both operands are from a constant buffer.
                 // Be optimistic and assume it matches. Avoid constant buffer 1 as official drivers
                 // uses this one to store compiler constants.
-                return src0.GetCbufSlot() == 1 ? src1 : src0;
+                return src0CbufSlot == 1 ? src1 : src0;
             }
-            else if (src0.Type == OperandType.ConstantBuffer && src1.Type == OperandType.Constant)
+            else if (src0IsConstantBuffer && src1.Type == OperandType.Constant)
             {
                 if ((uint)src1.Value == mask)
                 {
                     return src0;
                 }
             }
-            else if (src0.Type == OperandType.Constant && src1.Type == OperandType.ConstantBuffer)
+            else if (src0.Type == OperandType.Constant && src1IsConstantBuffer)
             {
                 if ((uint)src0.Value == mask)
                 {

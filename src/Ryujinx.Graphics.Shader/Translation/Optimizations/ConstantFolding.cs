@@ -153,10 +153,6 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                     EvaluateFPUnary(operation, (x) => float.IsNaN(x));
                     break;
 
-                case Instruction.LoadConstant:
-                    operation.TurnIntoCopy(Cbuf(operation.GetSource(0).Value, operation.GetSource(1).Value));
-                    break;
-
                 case Instruction.Maximum:
                     EvaluateBinary(operation, (x, y) => Math.Max(x, y));
                     break;
