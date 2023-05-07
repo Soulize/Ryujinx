@@ -1,8 +1,5 @@
 ﻿using Silk.NET.Vulkan;
 using System;
-using System.Buffers;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace Ryujinx.Graphics.Vulkan
 {
@@ -82,7 +79,7 @@ namespace Ryujinx.Graphics.Vulkan
         /// </summary>
         /// <param name="cbIndex">Command buffer index of the command buffer that owns the fence</param>
         /// <param name="fence">Fence to be added</param>
-        /// <returns>True if the constant buffer's previous fence value was null</returns>
+        /// <returns>True if the command buffer's previous fence value was null</returns>
         public bool AddFence(int cbIndex, FenceHolder fence)
         {
             ref FenceHolder fenceRef = ref _fences[cbIndex];
@@ -106,10 +103,10 @@ namespace Ryujinx.Graphics.Vulkan
         }
 
         /// <summary>
-        /// Determines if a fence referenced on the given constant buffer.
+        /// Determines if a fence referenced on the given command buffer.
         /// </summary>
-        /// <param name="cbIndex"></param>
-        /// <returns></returns>
+        /// <param name="cbIndex">Index of the command buffer to check if it's used</param>
+        /// <returns>True if referenced, false otherwise</returns>
         public bool HasFence(int cbIndex)
         {
             return _fences[cbIndex] != null;
@@ -162,17 +159,28 @@ namespace Ryujinx.Graphics.Vulkan
         private bool WaitForFencesImpl(Vk api, Device device, int offset, int size, bool hasTimeout, ulong timeout)
         {
             Span<FenceHolder> fenceHolders = new FenceHolder[CommandBufferPool.MaxCommandBuffers];
-            Fence[] fences;
 
             int count = size != 0 ? GetOverlappingFences(fenceHolders, offset, size) : GetFences(fenceHolders);
-            fences = new Fence[count];
+            Span<Fence> fences = stackalloc Fence[count];
+
+            int fenceCount = 0;
 
             for (int i = 0; i < count; i++)
             {
-                fences[i] = fenceHolders[i].Get();
+                if (fenceHolders[i].TryGet(out Fence fence))
+                {
+                    fences[fenceCount] = fence;
+
+                    if (fenceCount < i)
+                    {
+                        fenceHolders[fenceCount] = fenceHolders[i];
+                    }
+
+                    fenceCount++;
+                }
             }
 
-            if (fences.Length == 0)
+            if (fenceCount == 0)
             {
                 return true;
             }
@@ -181,14 +189,14 @@ namespace Ryujinx.Graphics.Vulkan
 
             if (hasTimeout)
             {
-                signaled = FenceHelper.AllSignaled(api, device, fences, timeout);
+                signaled = FenceHelper.AllSignaled(api, device, fences.Slice(0, fenceCount), timeout);
             }
             else
             {
-                FenceHelper.WaitAllIndefinitely(api, device, fences);
+                FenceHelper.WaitAllIndefinitely(api, device, fences.Slice(0, fenceCount));
             }
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < fenceCount; i++)
             {
                 fenceHolders[i].Put();
             }
