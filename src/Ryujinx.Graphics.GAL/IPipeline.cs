@@ -97,7 +97,7 @@ namespace Ryujinx.Graphics.GAL
         void SetUserClipDistance(int index, bool enableClip);
 
         void SetVertexAttribs(ReadOnlySpan<VertexAttribDescriptor> vertexAttribs);
-        void SetVertexBuffers(ReadOnlySpan<VertexBufferDescriptor> vertexBuffers);
+        void SetVertexBuffers(int start, ReadOnlySpan<VertexBufferDescriptor> vertexBuffers);
 
         void SetViewports(ReadOnlySpan<Viewport> viewports, bool disableTransform);
 

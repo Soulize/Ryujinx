@@ -1,3 +1,4 @@
+using Ryujinx.Common.Utilities;
 using Ryujinx.Graphics.GAL;
 using Ryujinx.Graphics.Gpu.Synchronization;
 using Ryujinx.Memory.Range;
@@ -245,6 +246,18 @@ namespace Ryujinx.Graphics.Gpu.Memory
                     _dirtyStart = ulong.MaxValue;
                 }
             }
+        }
+
+        public Buffer Use(ulong address, ulong size, bool write = false)
+        {
+            SynchronizeMemory(address, size);
+
+            if (write)
+            {
+                SignalModified(address, size);
+            }
+
+            return this;
         }
 
         /// <summary>

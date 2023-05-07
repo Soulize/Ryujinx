@@ -1,3 +1,5 @@
+using Ryujinx.Graphics.Shader;
+
 namespace Ryujinx.Graphics.Gpu.Memory
 {
     /// <summary>
@@ -5,9 +7,23 @@ namespace Ryujinx.Graphics.Gpu.Memory
     /// </summary>
     struct VertexBuffer
     {
-        public ulong Address;
-        public ulong Size;
+        public BufferBounds Bounds;
         public int   Stride;
         public int   Divisor;
+
+        public static bool TranslateAndCreateBuffer(MemoryManager memoryManager, ref VertexBuffer vb, ulong gpuVa, ulong size, int stride, int divisor)
+        {
+            ref BufferBounds bounds = ref vb.Bounds;
+
+            if (BufferBounds.TranslateAndCreateBuffer(memoryManager, ref bounds, gpuVa, size, BufferUsageFlags.None) || vb.Stride != stride || vb.Divisor != divisor)
+            {
+                vb.Stride = stride;
+                vb.Divisor = divisor;
+
+                return true;
+            }
+
+            return false;
+        }
     }
 }

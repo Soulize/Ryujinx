@@ -1400,11 +1400,11 @@ namespace Ryujinx.Graphics.OpenGL
             _vertexArray.SetVertexAttributes(vertexAttribs);
         }
 
-        public void SetVertexBuffers(ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
+        public void SetVertexBuffers(int start, ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
         {
             EnsureVertexArray();
 
-            _vertexArray.SetVertexBuffers(vertexBuffers);
+            _vertexArray.SetVertexBuffers(start, vertexBuffers);
         }
 
         public void SetViewports(ReadOnlySpan<Viewport> viewports, bool disableTransform)

@@ -1180,9 +1180,15 @@ namespace Ryujinx.Graphics.Vulkan
             SignalStateChange();
         }
 
-        public void SetVertexBuffers(ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
+        private VertexBufferDescriptor[] _vbCache = new VertexBufferDescriptor[Constants.MaxVertexBuffers];
+
+        public void SetVertexBuffers(int start, ReadOnlySpan<VertexBufferDescriptor> vertexBuffers)
         {
-            int count = Math.Min(Constants.MaxVertexBuffers, vertexBuffers.Length);
+            int count = Math.Min(Constants.MaxVertexBuffers, vertexBuffers.Length + start) - start;
+
+            vertexBuffers.Slice(0, count).CopyTo(_vbCache.AsSpan(start));
+
+            count = _vbCache.Length;
 
             _newState.Internal.VertexBindingDescriptions[0] = new VertexInputBindingDescription(0, 0, VertexInputRate.Vertex);
 
@@ -1193,7 +1199,7 @@ namespace Ryujinx.Graphics.Vulkan
 
             for (int i = 0; i < count; i++)
             {
-                var vertexBuffer = vertexBuffers[i];
+                var vertexBuffer = _vbCache[i];
 
                 // TODO: Support divisor > 1
                 var inputRate = vertexBuffer.Divisor != 0 ? VertexInputRate.Instance : VertexInputRate.Vertex;

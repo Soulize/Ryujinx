@@ -287,8 +287,8 @@ namespace Ryujinx.Graphics.Gpu.Engine.MME
 
             ulong indirectBufferSize = (ulong)maxDrawCount * (ulong)stride;
 
-            ulong indirectBufferAddress = bufferCache.TranslateAndCreateBuffer(_processor.MemoryManager, indirectBufferGpuVa, indirectBufferSize);
-            ulong parameterBufferAddress = bufferCache.TranslateAndCreateBuffer(_processor.MemoryManager, parameterBufferGpuVa, 4);
+            (ulong indirectBufferAddress, _) = bufferCache.TranslateAndCreateBuffer(_processor.MemoryManager, indirectBufferGpuVa, indirectBufferSize);
+            (ulong parameterBufferAddress, _) = bufferCache.TranslateAndCreateBuffer(_processor.MemoryManager, parameterBufferGpuVa, 4);
 
             _processor.ThreedClass.DrawIndirect(
                 topology,
