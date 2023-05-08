@@ -1,7 +1,9 @@
 ﻿using Ryujinx.Common;
+using Ryujinx.Common.Memory;
 using Ryujinx.Common.Utilities;
 using Ryujinx.HLE.HOS.Services.SurfaceFlinger.Types;
 using System;
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -9,13 +11,13 @@ using System.Text;
 
 namespace Ryujinx.HLE.HOS.Services.SurfaceFlinger
 {
-    class Parcel
+    sealed class Parcel : IDisposable
     {
-        private readonly byte[] _rawData;
+        private readonly IMemoryOwner<byte> _rawDataOwner;
 
-        private Span<byte> Raw => new Span<byte>(_rawData);
+        private Span<byte> Raw => _rawDataOwner.Memory.Span;
 
-        private ref ParcelHeader Header => ref MemoryMarshal.Cast<byte, ParcelHeader>(_rawData)[0];
+        private ref ParcelHeader Header => ref MemoryMarshal.Cast<byte, ParcelHeader>(Raw)[0];
 
         private Span<byte> Payload => Raw.Slice((int)Header.PayloadOffset, (int)Header.PayloadSize);
 
@@ -23,10 +25,13 @@ namespace Ryujinx.HLE.HOS.Services.SurfaceFlinger
 
         private int _payloadPosition;
         private int _objectPosition;
+        private bool _isDisposed;
 
-        public Parcel(byte[] rawData)
+        public Parcel(ReadOnlySpan<byte> rawData)
         {
-            _rawData  = rawData;
+            _rawDataOwner = ByteMemoryPool.Shared.Rent(rawData.Length);
+
+            rawData.CopyTo(_rawDataOwner.Memory.Span);
 
             _payloadPosition = 0;
             _objectPosition  = 0;
@@ -36,7 +41,7 @@ namespace Ryujinx.HLE.HOS.Services.SurfaceFlinger
         {
             uint headerSize = (uint)Unsafe.SizeOf<ParcelHeader>();
 
-            _rawData = new byte[BitUtils.AlignUp<uint>(headerSize + payloadSize + objectsSize, 4)];
+            _rawDataOwner = ByteMemoryPool.Shared.RentCleared(BitUtils.AlignUp<uint>(headerSize + payloadSize + objectsSize, 4));
 
             Header.PayloadSize   = payloadSize;
             Header.ObjectsSize   = objectsSize;
@@ -216,6 +221,26 @@ namespace Ryujinx.HLE.HOS.Services.SurfaceFlinger
             UpdateHeader();
 
             return Raw.Slice(0, (int)(Header.PayloadSize + Header.ObjectsSize + Unsafe.SizeOf<ParcelHeader>()));
+        }
+
+        public void Dispose()
+        {
+            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (!_isDisposed)
+            {
+                _isDisposed = true;
+
+                if (disposing)
+                {
+                    _rawDataOwner.Dispose();
+                }
+            }
         }
     }
 }
