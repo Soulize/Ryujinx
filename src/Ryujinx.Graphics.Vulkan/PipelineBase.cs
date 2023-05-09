@@ -720,9 +720,11 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 if (_vertexBuffers[i].Overlaps(buffer, offset, size))
                 {
-                    _vertexBuffers[i].BindVertexBuffer(Gd, Cbs, (uint)i, ref _newState);
+                    _vertexBuffers[i].BindVertexBuffer(Gd, Cbs, (uint)i, ref _newState, _vertexBufferUpdater);
                 }
             }
+
+            _vertexBufferUpdater.Commit(Cbs);
         }
 
         public void SetAlphaTest(bool enable, float reference, GAL.CompareOp op)

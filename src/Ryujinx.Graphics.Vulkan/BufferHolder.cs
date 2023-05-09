@@ -94,7 +94,7 @@ namespace Ryujinx.Graphics.Vulkan
             _allocationAuto = allocation;
             _allocationImported = true;
             _waitable = new MultiFenceHolder(size);
-            _buffer = new Auto<DisposableBuffer>(new DisposableBuffer(gd.Api, device, buffer), _waitable, _allocationAuto);
+            _buffer = new Auto<DisposableBuffer>(new DisposableBuffer(gd.Api, device, buffer), this, _waitable, _allocationAuto);
             _bufferHandle = buffer.Handle;
             Size = size;
             _map = _allocation.HostPointer + offset;
@@ -113,7 +113,7 @@ namespace Ryujinx.Graphics.Vulkan
                 // Only swap if the buffer is not used in any queued command buffer.
                 bool isRented = _buffer.HasRentedCommandBufferDependency(_gd.CommandBufferPool);
 
-                if (!isRented && _gd.CommandBufferPool.OwnedByCurrentThread && !_flushLock.IsReaderLockHeld)
+                if (!isRented && _gd.CommandBufferPool.OwnedByCurrentThread && !_flushLock.IsReaderLockHeld && (_pendingData == null || cbs != null))
                 {
                     var currentAllocation = _allocationAuto;
                     var currentBuffer = _buffer;
@@ -123,6 +123,11 @@ namespace Ryujinx.Graphics.Vulkan
 
                     if (buffer.Handle != 0)
                     {
+                        if (cbs != null)
+                        {
+                            ClearMirrors(cbs.Value, 0, Size);
+                        }
+
                         _flushLock.AcquireWriterLock(Timeout.Infinite);
 
                         ClearFlushFence();
@@ -131,7 +136,7 @@ namespace Ryujinx.Graphics.Vulkan
 
                         _allocation = allocation;
                         _allocationAuto = new Auto<MemoryAllocation>(allocation);
-                        _buffer = new Auto<DisposableBuffer>(new DisposableBuffer(_gd.Api, _device, buffer), _waitable, _allocationAuto);
+                        _buffer = new Auto<DisposableBuffer>(new DisposableBuffer(_gd.Api, _device, buffer), this, _waitable, _allocationAuto);
                         _bufferHandle = buffer.Handle;
                         _map = allocation.HostPointer;
 

@@ -102,6 +102,11 @@ namespace Ryujinx.Graphics.Vulkan
             return _buffer == buffer;
         }
 
+        public bool Overlaps(Auto<DisposableBuffer> buffer, int offset, int size)
+        {
+            return buffer == _buffer && offset < _offset + _size && offset + size > _offset;
+        }
+
         public bool Matches(Auto<DisposableBuffer> buffer, int descriptorIndex, int offset, int size, int stride = 0)
         {
             return _buffer == buffer && DescriptorIndex == descriptorIndex && _offset == offset && _size == size && _stride == stride;
